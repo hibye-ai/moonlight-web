@@ -44,7 +44,7 @@ COPY --from=builder --chown=${UID}:${GID} /build/target/release/web-server ${MOO
 COPY --from=builder --chown=${UID}:${GID} /build/target/release/streamer ${MOONLIGHT_WEB_PATH}/streamer
 COPY --from=builder --chown=${UID}:${GID} /build/static ${MOONLIGHT_WEB_PATH}/static
 COPY LICENSE ${MOONLIGHT_WEB_PATH}/LICENSE
-COPY --chown=${UID}:${GID} docker/entrypoint.sh /entrypoint.sh
+COPY --chmod=755 --chown=${UID}:${GID} docker/entrypoint.sh /entrypoint.sh
 
 VOLUME ${MOONLIGHT_WEB_PATH}/server
 EXPOSE 8080 40000-40100/udp
