@@ -6,7 +6,7 @@ Stream apps from a [Sunshine](https://docs.lizardbyte.dev/projects/sunshine/late
 
 ![Moonlight Web library showing example PCs that are online, awaiting pairing, or offline](readme/library.png)
 
-This unofficial [Moonlight](https://moonlight-stream.org/) client is based on [MrCreativ3001/moonlight-web-stream v2.10.0](https://github.com/MrCreativ3001/moonlight-web-stream/commit/cd9d03cbf9a42b394f7b72a733a2f39cb5f0edd8) and was modified in October–November 2026. See [CHANGES.md](CHANGES.md) for the source snapshot and changes. The project is [GPL-3.0-or-later](LICENSE). The bundled Pretendard font is under the [SIL Open Font License](web/resources/fonts/OFL-Pretendard.txt).
+This unofficial [Moonlight](https://moonlight-stream.org/) client is based on [MrCreativ3001/moonlight-web-stream v2.10.0](https://github.com/MrCreativ3001/moonlight-web-stream/commit/cd9d03cbf9a42b394f7b72a733a2f39cb5f0edd8). See [CHANGES.md](CHANGES.md) for the source snapshot and changes. The project is [GPL-3.0-or-later](LICENSE). The bundled Pretendard font is under the [SIL Open Font License](web/resources/fonts/OFL-Pretendard.txt).
 
 ## Overview
 

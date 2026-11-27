@@ -6,7 +6,7 @@
 
 ![온라인, 페어링 필요, 오프라인 상태의 예시 PC가 표시된 Moonlight Web 라이브러리 화면](readme/library.png)
 
-이 비공식 [Moonlight](https://moonlight-stream.org/) 클라이언트는 [MrCreativ3001/moonlight-web-stream v2.10.0](https://github.com/MrCreativ3001/moonlight-web-stream/commit/cd9d03cbf9a42b394f7b72a733a2f39cb5f0edd8)을 기반으로 2026년 10월~11월에 수정되었습니다. 원본 스냅샷과 변경 사항은 [CHANGES.md](CHANGES.md)에서 확인할 수 있습니다. 이 프로젝트는 [GPL-3.0-or-later](LICENSE) 라이선스를 따르며, 내장된 Pretendard 글꼴에는 [SIL Open Font License](web/resources/fonts/OFL-Pretendard.txt)가 적용됩니다.
+이 비공식 [Moonlight](https://moonlight-stream.org/) 클라이언트는 [MrCreativ3001/moonlight-web-stream v2.10.0](https://github.com/MrCreativ3001/moonlight-web-stream/commit/cd9d03cbf9a42b394f7b72a733a2f39cb5f0edd8)을 기반으로 합니다. 원본 스냅샷과 변경 사항은 [CHANGES.md](CHANGES.md)에서 확인할 수 있습니다. 이 프로젝트는 [GPL-3.0-or-later](LICENSE) 라이선스를 따르며, 내장된 Pretendard 글꼴에는 [SIL Open Font License](web/resources/fonts/OFL-Pretendard.txt)가 적용됩니다.
 
 <a id="overview"></a>
 ## 목차
