@@ -1,64 +1,72 @@
-# Moonlight Web — community fork
+# Moonlight Web — 커뮤니티 포크
 
-Stream apps from a [Sunshine](https://docs.lizardbyte.dev/projects/sunshine/latest/) PC to your browser over [WebRTC](https://webrtc.org/). The redesigned Moonlight Web console puts your PCs, streaming settings, and admin controls in one sidebar.
+**한국어** | [English](README.en.md)
 
-![Moonlight Web library showing example PCs that are online, awaiting pairing, or offline](readme/library.png)
+[Sunshine](https://docs.lizardbyte.dev/projects/sunshine/latest/) PC의 앱을 [WebRTC](https://webrtc.org/)로 브라우저에 스트리밍합니다. 새롭게 개편된 Moonlight Web 콘솔은 내 PC, 스트리밍 설정, 관리 기능을 하나의 사이드바에 모았습니다.
 
-This unofficial [Moonlight](https://moonlight-stream.org/) client is based on [MrCreativ3001/moonlight-web-stream v2.10.0](https://github.com/MrCreativ3001/moonlight-web-stream/commit/cd9d03cbf9a42b394f7b72a733a2f39cb5f0edd8) and was modified in October–November 2026. See [CHANGES.md](CHANGES.md) for the source snapshot and changes. The project is [GPL-3.0-or-later](LICENSE). The bundled Pretendard font is under the [SIL Open Font License](web/resources/fonts/OFL-Pretendard.txt).
+![온라인, 페어링 필요, 오프라인 상태의 예시 PC가 표시된 Moonlight Web 라이브러리 화면](readme/library.png)
 
-## Overview
+이 비공식 [Moonlight](https://moonlight-stream.org/) 클라이언트는 [MrCreativ3001/moonlight-web-stream v2.10.0](https://github.com/MrCreativ3001/moonlight-web-stream/commit/cd9d03cbf9a42b394f7b72a733a2f39cb5f0edd8)을 기반으로 2026년 10월~11월에 수정되었습니다. 원본 스냅샷과 변경 사항은 [CHANGES.md](CHANGES.md)에서 확인할 수 있습니다. 이 프로젝트는 [GPL-3.0-or-later](LICENSE) 라이선스를 따르며, 내장된 Pretendard 글꼴에는 [SIL Open Font License](web/resources/fonts/OFL-Pretendard.txt)가 적용됩니다.
 
-- [Web interface](#web-interface)
-- [Limitations](#limitations)
-- [Installation](#installation)
-  - [Manual Installation](#install-manually)
-  - [Docker Installation](#docker-installation)
-- [Setup](#setup)
-  - [Streaming over the Internet](#streaming-over-the-internet)
-  - [Configuring https](#configuring-https)
-  - [Proxying via Apache 2](#proxying-via-apache-2)
-  - [Authentication with a Reverse Proxy](#authentication-using-a-reverse-proxy)
-  - [Using Web Socket Transport](#using-websocket-transport)
-- [Config](#config)
-- [Migrating to v2](#migrating-to-v2)
-- [Contributors](#contributors)
-- [Building](#building)
+<a id="overview"></a>
+## 목차
 
-## Web interface
+- [웹 인터페이스](#web-interface)
+- [제한 사항](#limitations)
+- [설치](#installation)
+  - [수동 설치](#install-manually)
+  - [Docker 설치](#docker-installation)
+- [초기 설정](#setup)
+  - [인터넷을 통한 스트리밍](#streaming-over-the-internet)
+  - [HTTPS 설정](#configuring-https)
+  - [Apache 2 리버스 프록시](#proxying-via-apache-2)
+  - [리버스 프록시를 통한 인증](#authentication-using-a-reverse-proxy)
+  - [WebSocket 전송 사용](#using-websocket-transport)
+- [설정 파일](#config)
+- [v2 마이그레이션](#migrating-to-v2)
+- [기여자](#contributors)
+- [빌드](#building)
 
-- **Library** shows your PCs and their connection status. Select a paired PC to browse and launch its apps.
-- **Settings** controls video, audio, input, and transport. You can set defaults for this browser and keep separate settings for individual PCs and apps.
-- **Admin** manages users and roles. The theme switch is at the bottom of the sidebar.
-- **While streaming**, use the on-screen controls to adjust input or check stream statistics. The optional [clipboard bridge](clipboard-bridge/README.md) connects the stream to the host clipboard.
+<a id="web-interface"></a>
+## 웹 인터페이스
 
-![Moonlight Web streaming settings showing the sidebar, settings groups, and bitrate controls](readme/settings.png)
+- **라이브러리**에는 등록된 PC와 연결 상태가 표시됩니다. 페어링된 PC를 선택하면 앱 목록을 보고 바로 실행할 수 있습니다.
+- **설정**에서는 비디오, 오디오, 입력, 전송 방식을 조정합니다. 이 브라우저의 전체 기본값을 지정하거나 PC·앱별 전용 설정을 따로 둘 수 있습니다.
+- **관리**에서는 사용자와 역할을 관리합니다. 사이드바 하단에서 **테마 전환**도 할 수 있습니다.
+- **스트리밍 중**에는 화면의 스트리밍 제어 메뉴에서 입력 방식을 조정하거나 스트림 **통계**를 확인할 수 있습니다. 선택 기능인 [클립보드 브리지](clipboard-bridge/README.md)를 사용하면 스트림과 호스트 PC의 클립보드를 연동할 수 있습니다.
+
+![사이드바, 설정 그룹, 비트레이트 조절 항목이 표시된 Moonlight Web 스트리밍 설정 화면](readme/settings.png)
 
 <details>
-<summary>How the connection works</summary>
+<summary>연결 구조 보기</summary>
 
-![Connection diagram showing a browser connecting to Moonlight Web and Moonlight Web connecting to Sunshine](readme/structure.png)
+![브라우저가 Moonlight Web에 연결되고 Moonlight Web이 Sunshine에 연결되는 구조를 나타낸 다이어그램](readme/structure.png)
 
 </details>
 
-## Limitations
-- Features that only work in a [Secure Context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts#:~:text=They%20must%20be,be%20considered%20deprecated.) -> [How to configure a Secure Context / https](#configuring-https)
-  - Controllers: [Gamepad API](https://developer.mozilla.org/en-US/docs/Web/API/Gamepad_API)
-  - Keyboard Lock (allows to capture almost all keys also OS Keys): [Experimental Keyboard Lock API](https://developer.mozilla.org/en-US/docs/Web/API/Keyboard_API)
-  - Web Socket Transport because of the [Web Codecs Api](https://developer.mozilla.org/en-US/docs/Web/API/VideoDecoder)
+<a id="limitations"></a>
+## 제한 사항
+- [보안 컨텍스트(Secure Context)](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts#:~:text=They%20must%20be,be%20considered%20deprecated.)에서만 동작하는 기능 -> [보안 컨텍스트 / HTTPS 설정 방법](#configuring-https)
+  - 컨트롤러: [Gamepad API](https://developer.mozilla.org/en-US/docs/Web/API/Gamepad_API)
+  - 키보드 잠금(OS 키를 포함한 대부분의 키 입력 캡처): [Experimental Keyboard Lock API](https://developer.mozilla.org/en-US/docs/Web/API/Keyboard_API)
+  - [WebCodecs API](https://developer.mozilla.org/en-US/docs/Web/API/VideoDecoder)를 사용하는 WebSocket 전송
 
-## Installation
+<a id="installation"></a>
+## 설치
 
-Build this fork [manually](#install-manually) or [with Docker](#docker-installation).
+이 포크는 [수동](#install-manually) 또는 [Docker](#docker-installation)로 빌드해 실행할 수 있습니다.
 
-### Install Manually
+<a id="install-manually"></a>
+### 수동 설치
 
-1. Install [Sunshine](https://docs.lizardbyte.dev/projects/sunshine/latest/) on the PC you want to stream from.
-2. [Build the fork](#building), then run the `web-server` executable with the `streamer` executable and frontend files in place.
-3. Open `http://localhost:8080` on the machine running Moonlight Web. You can change the [bind address](#bind-address).
+1. 스트리밍할 호스트 PC에 [Sunshine](https://docs.lizardbyte.dev/projects/sunshine/latest/)을 설치합니다.
+2. [포크를 빌드](#building)한 뒤, `streamer` 실행 파일과 프런트엔드 파일이 준비된 상태에서 `web-server` 실행 파일을 실행합니다.
+3. Moonlight Web이 실행 중인 기기에서 `http://localhost:8080`에 접속합니다. 주소와 포트는 [수신 주소와 포트](#bind-address)에서 변경할 수 있습니다.
 
-### Docker Installation
+<a id="docker-installation"></a>
+### Docker 설치
 
-From the root of this checkout, build the image and start a local instance:
+저장소 루트에서 이미지를 빌드하고 로컬에서 실행합니다.
 
 ```sh
 docker build -t moonlight-web-fork -f docker/Dockerfile.source .
@@ -69,41 +77,43 @@ docker run --rm --name moonlight-web \
   moonlight-web-fork
 ```
 
-For access from other devices, see [Setup](#setup) and [Configuring HTTPS](#configuring-https). The [upstream Docker guide](docker/README.md) describes the original project's published image.
+다른 기기에서 접속하려면 [초기 설정](#setup)과 [HTTPS 설정](#configuring-https)을 참고하세요. 원본 프로젝트의 배포 이미지에 대한 안내는 [원본 Docker 가이드](docker/README.md)에 있습니다.
 
-## Setup
+<a id="setup"></a>
+## 초기 설정
 
-1. Choose a username and password. With the default configuration, the first login creates the administrator account.
-2. In **Library**, select **Add PC** and enter the Sunshine host's address. Use an address reachable from the Moonlight Web server, and leave the port blank when using Sunshine's default port.
-3. Select the new PC and enter the pairing PIN in Sunshine.
-4. Open the paired PC and select an app. Use **Settings** to adjust video, audio, and input before starting a stream.
+1. 사용자 이름과 비밀번호를 입력합니다. 기본 설정에서는 최초 로그인 시 관리자 계정이 자동으로 생성됩니다.
+2. **라이브러리**에서 **PC 추가**를 선택한 뒤 Sunshine 호스트 주소를 입력합니다. Moonlight Web 서버에서 접근할 수 있는 주소를 사용하며, Sunshine 기본 포트를 쓰는 경우 포트는 비워 둡니다.
+3. 추가한 PC를 선택하고 화면에 표시된 페어링 PIN을 Sunshine에 입력합니다.
+4. 페어링된 PC를 열어 실행할 앱을 선택합니다. 스트리밍을 시작하기 전에 **설정**에서 비디오, 오디오, 입력 옵션을 조정할 수 있습니다.
 
-### Streaming over the Internet
+<a id="streaming-over-the-internet"></a>
+### 인터넷을 통한 스트리밍
 
-1. Forward the web server port on your router (default is `8080`; HTTP is `80`, HTTPS is `443`).  
-   You can configure this using the [`bind_address`](#bind-address) option.
+1. 공유기에서 웹 서버 포트를 포워딩합니다(기본값 `8080`, HTTP `80`, HTTPS `443`).<br>
+   이 설정은 [`bind_address`](#bind-address) 옵션으로 변경할 수 있습니다.
 
-When running on a **local network**, WebRTC peers usually negotiate connections without any issues.
+**로컬 네트워크**에서는 보통 WebRTC 피어 간 연결이 문제없이 협상됩니다.
 
-When streaming **over the Internet**, the built-in STUN servers will attempt to establish a direct peer-to-peer WebRTC connection. This works for most home networks, but may fail in more restrictive environments (for example, corporate firewalls or strict NAT configurations).
+**인터넷을 통해** 스트리밍할 때는 내장 STUN 서버가 직접 P2P WebRTC 연결을 시도합니다. 대부분의 가정용 네트워크에서는 잘 동작하지만, 사내 방화벽이나 엄격한 NAT 환경에서는 실패할 수 있습니다.
 
-If a direct WebRTC connection cannot be established, you have a few options:
+직접 WebRTC 연결을 맺을 수 없을 때는 다음 방법을 사용할 수 있습니다:
 
-1. **Use a TURN server (recommended)**  
-   Configure a [TURN server](#configure-a-turn-server) to reliably relay WebRTC traffic when direct peer-to-peer connections are blocked.
+1. **TURN 서버 사용(권장)**<br>
+   직접 P2P 연결이 차단된 환경에서 WebRTC 트래픽을 안정적으로 중계하려면 [TURN 서버를 구성](#configure-a-turn-server)하세요.
 
-2. **Forward ports directly**  
-   You can [forward the required ports](#port-forward) on your router.  
-   Note that this may still fail if the firewall blocks UDP traffic.
+2. **포트 직접 포워딩**<br>
+   공유기에서 [필요한 포트를 포워딩](#port-forward)할 수 있습니다.<br>
+   단, 방화벽이 UDP 트래픽을 차단하는 경우에는 이 방법도 동작하지 않을 수 있습니다.
 
-3. **Use WebSocket transport as a fallback**  
-   WebSockets use standard HTTP/HTTPS ports and are often allowed even in very restrictive networks, making them a good fallback option when WebRTC negotiation fails. See [Using WebSocket Transport](#using-websocket-transport).
+3. **대체 수단으로 WebSocket 전송 사용**<br>
+   WebSocket은 표준 HTTP/HTTPS 포트를 사용하므로 제한이 심한 네트워크에서도 허용되는 경우가 많아, WebRTC 연결에 실패했을 때 유용한 대안이 됩니다. 자세한 내용은 [WebSocket 전송 사용](#using-websocket-transport)을 참고하세요.
 
+<a id="configure-a-turn-server"></a>
+#### TURN 서버 구성
+1. [coturn](https://github.com/coturn/coturn) 같은 TURN 서버를 직접 구축·구성하거나 외부 호스팅 서비스를 이용합니다.
 
-#### Configure a turn server
-1. Host and configure a turn server like [coturn](https://github.com/coturn/coturn) or use other services to host one for you.
-
-2. Add your turn server to your WebRTC Ice Server list
+2. WebRTC ICE 서버 목록에 TURN 서버를 추가합니다.
 ```json
 {
     "webrtc": {
@@ -135,11 +145,12 @@ If a direct WebRTC connection cannot be established, you have a few options:
     }
 }
 ```
-Some (business) firewalls might be very strict and only allow tcp on port 443 for turn connections if that's the case also bind the turn server on port 443 and add `"turn:yourip.com:443?transport=tcp"` to the url's list.
+일부 기업 방화벽은 매우 엄격해 443 포트의 TCP 연결만 허용할 수 있습니다. 이 경우 TURN 서버를 443 포트에도 바인딩하고 URL 목록에 `"turn:yourip.com:443?transport=tcp"`를 추가하세요.
 
-#### Port forward
+<a id="port-forward"></a>
+#### 포트 포워딩
 
-1. Set the port range used by the WebRTC Peer to a fixed range in the [config](#config)
+1. [설정 파일](#config)에서 WebRTC 피어가 사용할 포트 범위를 고정합니다.
 ```json
 {
     "webrtc": {
@@ -150,10 +161,10 @@ Some (business) firewalls might be very strict and only allow tcp on port 443 fo
     }
 }
 ```
-2. Forward the port range specified in the previous step as `udp`.
-If you're using Windows Defender make sure to allow NAT Traversal. Important: If your firewall blocks udp connections this won't work and you need to host a [turn server](#configure-a-turn-server)
+2. 위에서 지정한 포트 범위를 `udp`로 포워딩합니다.
+Windows Defender를 사용 중이라면 NAT Traversal을 허용하세요. 주의: 방화벽이 UDP 연결을 차단하면 이 방법은 동작하지 않으므로 [TURN 서버를 구성](#configure-a-turn-server)해야 합니다.
 
-3. Configure [WebRTC Nat 1 To 1](#webrtc-nat-1-to-1-ips) to advertise your [public ip](https://whatismyipaddress.com/) (Optional: WebRTC stun servers can usually automatically detect them):
+3. [WebRTC NAT 1:1](#webrtc-nat-1-to-1-ips)을 설정해 [공인 IP](https://whatismyipaddress.com/)를 알립니다(선택 사항: 보통 WebRTC STUN 서버가 자동으로 감지합니다):
 ```json
 {
     "webrtc": {
@@ -167,24 +178,25 @@ If you're using Windows Defender make sure to allow NAT Traversal. Important: If
 }
 ```
 
-It might be helpful to look what kind of nat your pc is behind:
-- [Nat Checker](https://www.checkmynat.com/)
+PC가 어떤 NAT 유형 뒤에 있는지 확인하면 문제 해결에 도움이 됩니다:
+- [NAT Checker](https://www.checkmynat.com/)
 
-### Configuring https
-You can configure https directly with the Moonlight Web Server.
+<a id="configuring-https"></a>
+### HTTPS 설정
+Moonlight Web 서버에서 직접 HTTPS를 설정할 수 있습니다.
 
-1. You'll need a private key and a certificate.
+1. 개인 키와 인증서가 필요합니다.
 
-You can generate a self signed certificate with this python script [generate_certificate.py](generate_certificate.py):
+Python 스크립트 [generate_certificate.py](generate_certificate.py)로 자체 서명 인증서를 생성할 수 있습니다:
 
 ```sh
 pip install pyOpenSSL
 python ./generate_certificate.py
 ```
 
-2. Copy the files `server/key.pem` and `server/cert.pem` into your `server` directory.
+2. 생성된 `server/key.pem`과 `server/cert.pem` 파일을 `server` 디렉터리에 복사합니다.
 
-3. Modify the [config](#config) to enable https using the certificates
+3. 인증서를 사용해 HTTPS를 활성화하도록 [설정 파일](#config)을 수정합니다.
 ```json
 {
     "web_server": {
@@ -196,19 +208,20 @@ python ./generate_certificate.py
 }
 ```
 
-### Proxying via Apache 2
-It's possible to proxy the Moonlight Website using [Apache 2](https://httpd.apache.org/).
+<a id="proxying-via-apache-2"></a>
+### Apache 2 리버스 프록시
+[Apache 2](https://httpd.apache.org/)를 사용해 Moonlight Web 사이트를 프록시할 수 있습니다.
 
-Note:
-When you want to use https, the Moonlight Website should use http so that Apache 2 will handle all the https encryption.
+참고:
+HTTPS를 사용하려면 Apache 2가 HTTPS 암호화를 모두 처리하도록 Moonlight Web 서버는 HTTP로 실행해야 합니다.
 
-1. Enable the modules `mod_proxy`, `mod_proxy_wstunnel`
+1. `mod_proxy`와 `mod_proxy_wstunnel` 모듈을 활성화합니다.
 
 ```sh
 sudo a2enmod mod_proxy mod_proxy_wstunnel
 ```
 
-2. Create a new file under `/etc/apache2/conf-available/moonlight-web.conf` with the content:
+2. `/etc/apache2/conf-available/moonlight-web.conf` 파일을 만들고 아래 내용을 입력합니다:
 ```
 # Example subpath "/moonlight" -> To connect you'd go to "http://yourip.com/moonlight/"
 Define MOONLIGHT_SUBPATH /moonlight
@@ -227,12 +240,12 @@ ProxyPass ${MOONLIGHT_SUBPATH}/ http://${MOONLIGHT_STREAMER}${MOONLIGHT_SUBPATH}
 ProxyPassReverse ${MOONLIGHT_SUBPATH}/ http://${MOONLIGHT_STREAMER}${MOONLIGHT_SUBPATH}/
 ```
 
-3. Enable the created config file
+3. 생성한 설정 파일을 활성화합니다.
 ```sh
 sudo a2enconf moonlight-web
 ```
 
-4. Change [config](#config) to include the [prefixed path](#url-path-prefix)
+4. [경로 접두사](#url-path-prefix)를 포함하도록 [설정 파일](#config)을 수정합니다.
 ```json
 {
     "web_server": {
@@ -241,15 +254,16 @@ sudo a2enconf moonlight-web
 }
 ```
 
-5. Use https with a certificate (Optional)
+5. 인증서로 HTTPS를 적용합니다(선택 사항).
 
-### Authentication using a Reverse Proxy
-Authentication with a reverse proxy works by the proxy adding custom headers to the request of the user. In this example the username header is named `X-Forwarded-User`.
+<a id="authentication-using-a-reverse-proxy"></a>
+### 리버스 프록시를 통한 인증
+리버스 프록시 인증은 프록시가 사용자 요청에 사용자 지정 헤더를 추가하는 방식으로 동작합니다. 아래 예시에서는 사용자 이름 헤더로 `X-Forwarded-User`를 사용합니다.
 
-<b>Make sure that the header is not changeable by any external request and only the proxy can set this header.</b>
+<b>외부 요청에서 이 헤더를 임의로 변경할 수 없도록 차단하고, 반드시 프록시만 설정할 수 있게 구성하세요.</b>
 
-Enable proxy authentication by setting the [forwarded header username](#forwarded-header-username) option.
-By default the [auto create missing user](#forwarded-header-auto-create-missing-user) option is turned on even if it's not specified in the config.
+[헤더로 전달하는 사용자 이름](#forwarded-header-username) 옵션을 지정하면 프록시 인증이 활성화됩니다.
+설정 파일에 명시하지 않아도 [미등록 사용자 자동 생성](#forwarded-header-auto-create-missing-user) 옵션은 기본적으로 켜져 있습니다.
 ```json
 {
     "web_server": {
@@ -261,41 +275,44 @@ By default the [auto create missing user](#forwarded-header-auto-create-missing-
 }
 ```
 
-### Using WebSocket Transport
+<a id="using-websocket-transport"></a>
+### WebSocket 전송 사용
 
-In some networks (for example, corporate or highly restricted environments), establishing a WebRTC connection can be difficult or may not work at all.
-To support these cases, you can stream data over **WebSockets** using the same HTTP or HTTPS port that your server already exposes.
+사내망이나 제한이 심한 네트워크에서는 WebRTC 연결을 맺기 어렵거나 아예 불가능할 수 있습니다.
+이런 환경에서는 서버가 이미 노출한 HTTP 또는 HTTPS 포트를 그대로 사용해 **WebSocket**으로 데이터를 스트리밍할 수 있습니다.
 
-You can force the Web Sockets by setting the `Data Transport` option to `Web Sockets`.
+**데이터 전송 방식** 옵션을 **웹 소켓 (Web Socket)**으로 설정하면 WebSocket 전송을 강제로 사용할 수 있습니다.
 
-There are a few important things to be aware of when using WebSockets for streaming:
+WebSocket 스트리밍을 사용할 때는 다음 사항을 유의하세요:
 
-- The browser’s `VideoDecoder` API is only available when your site is served over **HTTPS** (a secure context).
+- 브라우저의 `VideoDecoder` API는 사이트가 **HTTPS**(보안 컨텍스트)로 제공될 때만 사용할 수 있습니다.
 
-- If the application is **not** running in a secure context, it will fall back to an older video playback API, which may introduce noticeable latency.
+- 보안 컨텍스트가 아닌 환경에서는 구형 비디오 재생 API로 대체되며, 눈에 띄는 지연 시간이 발생할 수 있습니다.
 
-- If this is unacceptable and you know what you're doing, you can use a software-based decoder:
-  - Build a custom version of [openh264](https://github.com/MrCreativ3001/openh264-js) for the browser.
-  - This custom build allows video frames to be decoded directly in the browser without relying on the `VideoDecoder` API.
-  - After building, copy the generated `decoder.js` file to:
+- 이 지연을 피해야 하고 구성을 직접 다룰 수 있다면 소프트웨어 기반 디코더를 사용할 수 있습니다:
+  - 브라우저용 커스텀 [openh264](https://github.com/MrCreativ3001/openh264-js)를 빌드합니다.
+  - 이 빌드를 사용하면 `VideoDecoder` API에 의존하지 않고 브라우저에서 비디오 프레임을 직접 디코딩할 수 있습니다.
+  - 빌드 후 생성된 `decoder.js` 파일을 아래 경로에 복사합니다:
     ```
     static/libopenh264/decoder.js
     ```
-  - The decoder will be detected and used automatically.
+  - 디코더가 자동으로 감지되어 사용됩니다.
 
-## Config
-The config file is under `server/config.json` relative to the executable.
-Here are the most important settings for configuring Moonlight Web.
+<a id="config"></a>
+## 설정 파일
+설정 파일은 실행 파일 기준 `server/config.json`에 위치합니다.
+Moonlight Web 구성에 필요한 주요 설정은 다음과 같습니다.
 
-Most options have command line arguments or environment variables associated with them.
+대부분의 옵션은 명령줄 인수나 환경 변수로도 지정할 수 있습니다.
 ```sh
 ./web-server help
 ```
 
-For the full list of values, see the [Rust config module](common/src/config.rs).
+전체 설정 항목은 [Rust 설정 모듈](common/src/config.rs)에서 확인할 수 있습니다.
 
-### Bind Address 
-The address and port the website will run on
+<a id="bind-address"></a>
+### 수신 주소와 포트
+웹 사이트가 수신 대기할 주소와 포트입니다.
 
 ```json
 {
@@ -305,9 +322,10 @@ The address and port the website will run on
 }
 ```
 
-### Default User
-The user id which is selected by default when providing no login.
-Go into the Admin Panel and look for the user id of the user you want to make the default.
+<a id="default-user"></a>
+### 기본 사용자
+로그인하지 않았을 때 기본으로 선택되는 사용자 ID입니다.
+**관리** 패널에서 기본값으로 지정할 사용자의 **사용자 ID**를 확인하세요.
 
 ```json
 {
@@ -317,8 +335,9 @@ Go into the Admin Panel and look for the user id of the user you want to make th
 }
 ```
 
-### Https Certificates
-If enabled the web server will use https with the provided certificate data
+<a id="https-certificates"></a>
+### HTTPS 인증서
+설정하면 웹 서버가 지정된 인증서로 HTTPS를 사용합니다.
 
 ```json
 {
@@ -331,8 +350,9 @@ If enabled the web server will use https with the provided certificate data
 }
 ```
 
-### WebRTC Port Range
-This will set the port range on the web server used to communicate when using WebRTC
+<a id="webrtc-port-range"></a>
+### WebRTC 포트 범위
+WebRTC 통신에 사용할 웹 서버의 포트 범위를 지정합니다.
 
 ```json
 {
@@ -345,8 +365,9 @@ This will set the port range on the web server used to communicate when using We
 }
 ```
 
-### WebRTC Ice Servers
-A list of ice servers for webrtc to use.
+<a id="webrtc-ice-servers"></a>
+### WebRTC ICE 서버
+WebRTC가 사용할 ICE 서버 목록입니다.
 
 ```json
 {
@@ -371,14 +392,14 @@ A list of ice servers for webrtc to use.
 }
 ```
 
-You can also set ice servers with environment variables:
+환경 변수로도 ICE 서버를 지정할 수 있습니다:
 ```dockerfile
 ENV WEBRTC_ICE_SERVER_0_URL=stun:stun.l.google.com:5349
 ENV WEBRTC_ICE_SERVER_0_USERNAME=name
 ENV WEBRTC_ICE_SERVER_0_CREDENTIAL=cred
 ENV WEBRTC_ICE_SERVER_1_URL=stun:stun1.l.google.com:5349
 ```
-will currespond to the ice server
+이는 아래 ICE 서버 설정에 해당합니다:
 ```json
 {
     "webrtc": {
@@ -400,11 +421,12 @@ will currespond to the ice server
 }
 ```
 
-On first startup you can disable all default ice servers with the cli argument `--disable-default-webrtc-ice-servers` or the environment variable `DISABLE_DEFAULT_WEBRTC_ICE_SERVERS`.
-After the `config.json` has been generated all ice server in it will be used, even if those are the defaults.
+최초 실행 시 CLI 인수 `--disable-default-webrtc-ice-servers` 또는 환경 변수 `DISABLE_DEFAULT_WEBRTC_ICE_SERVERS`로 기본 ICE 서버를 모두 비활성화할 수 있습니다.
+`config.json`이 생성된 이후에는 기본값이라 하더라도 파일 안에 기록된 모든 ICE 서버가 사용됩니다.
 
-### WebRTC Ice Server Script
-The given script will be executed on every stream start to dynamically generate ice servers.
+<a id="webrtc-ice-server-script"></a>
+### WebRTC ICE 서버 스크립트
+스트림이 시작될 때마다 지정한 스크립트를 실행해 ICE 서버 목록을 동적으로 생성합니다.
 
 ```json
 {
@@ -414,9 +436,9 @@ The given script will be executed on every stream start to dynamically generate 
 }
 ```
 
-The script must return a json list that follows the same structure as the [WebRTC Ice Servers](#webrtc-ice-servers) config option.
+스크립트는 [WebRTC ICE 서버](#webrtc-ice-servers) 설정 옵션과 동일한 구조의 JSON 배열을 출력해야 합니다.
 
-Linux example using a bash script:
+Linux용 bash 스크립트 예시:
 ```sh
 #!/bin/bash
 
@@ -436,7 +458,7 @@ echo "[
 ]"
 ```
 
-Windows example using a batch script:
+Windows용 배치 스크립트 예시:
 ```bat
 @echo off
 
@@ -456,13 +478,14 @@ echo     }
 echo ]
 ```
 
-### WebRTC Nat 1 to 1 ips
-This will advertise the ip as an ice candidate on the web server.
-It's recommended to set this but stun servers should figure out the public ip.
+<a id="webrtc-nat-1-to-1-ips"></a>
+### WebRTC 1:1 NAT 주소
+지정한 IP를 웹 서버의 ICE 후보로 알립니다.
+설정해 두는 것을 권장하지만, 보통 STUN 서버가 공인 IP를 자동으로 파악합니다.
 
 `ice_candidate_type`:
-- `host` -> This is the ip address of the server and the client can connect to
-- `srflx` -> This is the public ip address of this server, like an ice candidate added from a stun server.
+- `host` -> 클라이언트가 직접 연결할 수 있는 서버의 IP 주소입니다.
+- `srflx` -> STUN 서버가 추가하는 ICE 후보처럼 이 서버의 공인 IP 주소입니다.
 
 ```json
 {
@@ -477,18 +500,19 @@ It's recommended to set this but stun servers should figure out the public ip.
 }
 ```
 
-You can also use the cli argument `--webrtc-nat-1to1-host` or environment variable `WEBRTC_NAT_1TO1_HOST` to use a ip as a host candidate type. This will do the same as the json above.
+CLI 인수 `--webrtc-nat-1to1-host` 또는 환경 변수 `WEBRTC_NAT_1TO1_HOST`로 IP를 `host` 후보 유형으로 지정할 수도 있습니다. 위 JSON 설정과 동일하게 동작합니다.
 ```dockerfile
 ENV WEBRTC_NAT_1TO1_HOST=74.125.224.72
 ```
 
-### WebRTC Network Types
-This will set the network types allowed by webrtc.
-<br>Allowed values:
-- udp4: All udp with ipv4
-- udp6: All udp with ipv6
-- tcp4: All tcp with ipv4
-- tcp6: All tcp with ipv6
+<a id="webrtc-network-types"></a>
+### WebRTC 네트워크 유형
+WebRTC가 허용할 네트워크 유형을 지정합니다.
+<br>허용 값:
+- udp4: IPv4 기반 모든 UDP
+- udp6: IPv6 기반 모든 UDP
+- tcp4: IPv4 기반 모든 TCP
+- tcp6: IPv6 기반 모든 TCP
 
 ```json
 {
@@ -501,9 +525,10 @@ This will set the network types allowed by webrtc.
 }
 ```
 
-### Url Path Prefix
-This is useful when rerouting the web page using services like [Apache 2](#proxying-via-apache-2).
-Will always append the prefix to all requests made by the website.
+<a id="url-path-prefix"></a>
+### URL 경로 접두사
+[Apache 2](#proxying-via-apache-2) 같은 서비스로 웹 페이지를 하위 경로에 라우팅할 때 유용합니다.
+웹 사이트가 보내는 모든 요청에 지정한 접두사를 자동으로 붙입니다.
 
 ```json
 {
@@ -513,8 +538,9 @@ Will always append the prefix to all requests made by the website.
 }
 ```
 
-### Forwarded Header Username
-The header that will give the authenticated username to this web server.
+<a id="forwarded-header-username"></a>
+### 헤더로 전달하는 사용자 이름
+웹 서버에 인증된 사용자 이름을 전달할 HTTP 헤더 이름입니다.
 
 ```json
 {
@@ -526,8 +552,9 @@ The header that will give the authenticated username to this web server.
 }
 ```
 
-### Forwarded Header Auto Create Missing User
-Automatically create a new user when the requested user specified in the [username_header](#forwarded-header-username) is not found.
+<a id="forwarded-header-auto-create-missing-user"></a>
+### 헤더로 전달된 사용자 자동 생성
+[username_header](#forwarded-header-username)로 전달된 사용자가 존재하지 않을 때 새 사용자를 자동으로 생성합니다.
 
 ```json
 {
@@ -539,67 +566,72 @@ Automatically create a new user when the requested user specified in the [userna
 }
 ```
 
-## Migrating to v2
-1. Some config options have changed so backup your old config by renaming it to something like `old_config.json`.
+<a id="migrating-to-v2"></a>
+## v2 마이그레이션
+1. 일부 설정 옵션이 변경되었으므로 기존 설정 파일 이름을 `old_config.json` 등으로 바꿔 백업합니다.
 
-2. Start the web server which will generate the new config.
+2. 웹 서버를 실행해 새 설정 파일을 생성합니다.
 
-3. Move your configurations to the new config
+3. 기존 설정 값을 새 설정 파일로 옮깁니다.
 
-4. The first user to login will be created and will be an admin. All previously stored hosts will be moved to this user.
+4. 처음 로그인하는 사용자가 관리자 계정으로 생성되며, 기존에 저장된 모든 호스트가 해당 사용자로 이전됩니다.
 
-Other changes:
-- Proxy path changed:
-  - change all instances of `ProxyPass ${MOONLIGHT_SUBPATH}/ http://${MOONLIGHT_STREAMER}/`<br> to `ProxyPass ${MOONLIGHT_SUBPATH}/ http://${MOONLIGHT_STREAMER}${MOONLIGHT_SUBPATH}/`
-  - [Proxying via Apache 2](https://github.com/MrCreativ3001/moonlight-web-stream/tree/v2?tab=readme-ov-file#proxying-via-apache-2)
+기타 변경 사항:
+- 프록시 경로 변경:
+  - `ProxyPass ${MOONLIGHT_SUBPATH}/ http://${MOONLIGHT_STREAMER}/`<br>를 모두 `ProxyPass ${MOONLIGHT_SUBPATH}/ http://${MOONLIGHT_STREAMER}${MOONLIGHT_SUBPATH}/`로 변경하세요.
+  - [Apache 2 리버스 프록시(업스트림 v2 안내)](https://github.com/MrCreativ3001/moonlight-web-stream/tree/v2?tab=readme-ov-file#proxying-via-apache-2)
 
-## Contributors
-- Thanks to [@Argon2000](https://github.com/Argon2000) for implementing a canvas renderer, which makes this run in the Tesla browser.
-- Thanks to [@Maneetbal](https://github.com/Maneetbal) for creating a new beautiful GUI.
-- Thanks to [@chromaticpipe](https://github.com/chromaticpipe) for making Github CI.
-- Thanks to [@qiin2333](https://github.com/qiin2333) for implementing HDR support.
-- Thanks to [@Idefix2020](https://github.com/Idefix2020) for fixing the context menu and implementing caching for app images
+<a id="contributors"></a>
+## 기여자
+- Tesla 브라우저에서도 실행할 수 있게 Canvas 렌더러를 구현해 주신 [@Argon2000](https://github.com/Argon2000)님께 감사드립니다.
+- 멋진 새 GUI를 만들어 주신 [@Maneetbal](https://github.com/Maneetbal)님께 감사드립니다.
+- GitHub CI를 구축해 주신 [@chromaticpipe](https://github.com/chromaticpipe)님께 감사드립니다.
+- HDR 지원을 구현해 주신 [@qiin2333](https://github.com/qiin2333)님께 감사드립니다.
+- 컨텍스트 메뉴 오류를 수정하고 앱 이미지 캐싱을 구현해 주신 [@Idefix2020](https://github.com/Idefix2020)님께 감사드립니다.
 
-## Building
-Clone this fork:
+<a id="building"></a>
+## 빌드
+이 포크를 클론합니다:
 ```sh
 git clone https://github.com/hibye-ai/moonlight-web.git
 cd moonlight-web
 ```
-Use Node.js 24 and the [Rust](https://www.rust-lang.org/tools/install) nightly pinned in [rust-toolchain.toml](rust-toolchain.toml). See [Build this fork](CHANGES.md#build-this-fork) for the Docker build and native dependencies.
+Node.js 24와 [rust-toolchain.toml](rust-toolchain.toml)에 고정된 [Rust](https://www.rust-lang.org/tools/install) nightly를 사용하세요. Docker 빌드와 네이티브 의존성은 [Build this fork](CHANGES.md#build-this-fork)를 참고하세요.
 
-There are 2 ways to build Moonlight Web:
-- Build it on your system
+Moonlight Web은 두 가지 방법으로 빌드할 수 있습니다:
+- 현재 시스템에서 직접 빌드
 
-  When you want to build it on your system take a look at how to compile the web server and streamer binary:
+  시스템에서 직접 빌드하려면 웹 서버와 스트리머 바이너리 컴파일 방법을 확인하세요:
   - [moonlight web server](#crate-moonlight-web-server)
   - [moonlight web streamer](#crate-moonlight-web-streamer)
   - [moonlight common rust](https://github.com/MrCreativ3001/moonlight-common-rust/tree/master/examples#client-common-c)
 
-- Compile using [Cargo Cross](https://github.com/cross-rs/cross) (doesn't work on most targets because cross-rs images use outdated c/cpp compilers)
+- [Cargo Cross](https://github.com/cross-rs/cross)로 크로스 컴파일(cross-rs 이미지의 C/C++ 컴파일러가 구버전이라 대부분의 타깃에서는 동작하지 않습니다)
 
-  After you've got a successful installation of cross just run the command in the project root directory.
-  This will compile the [web server](#crate-moonlight-web-server) and the [streamer](#crate-moonlight-web-streamer).
+  cross 설치가 완료되었다면 프로젝트 루트 디렉터리에서 아래 명령을 실행합니다.
+  [웹 서버](#crate-moonlight-web-server)와 [스트리머](#crate-moonlight-web-streamer)가 함께 컴파일됩니다.
   ```sh
   cross build --release --target YOUR_TARGET
   ```
-  Note: windows only has the gnu target `x86_64-pc-windows-gnu`
+  참고: Windows는 GNU 타깃(`x86_64-pc-windows-gnu`)만 지원합니다.
 
-### Crate: Moonlight Web Server
-This is the web server for Moonlight Web found at `src/`.
-It'll spawn a multiple [streamers](#crate-moonlight-web-server) as a subprocess for handling each stream.
+<a id="crate-moonlight-web-server"></a>
+### 크레이트: Moonlight Web Server
+`src/`에 있는 Moonlight Web용 웹 서버입니다.
+각 스트림을 처리하기 위해 여러 [스트리머](#crate-moonlight-web-streamer)를 하위 프로세스로 실행합니다.
 
-Build the web frontend with [npm](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm).
+[npm](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm)으로 웹 프런트엔드를 빌드합니다.
 ```sh
 npm ci
 npm run build
 ```
-The build output will be in `dist/`.
+빌드 결과물은 `dist/`에 생성됩니다.
 
-If you're compiling in:
-- debug mode -> the folder needs to be called `dist/`
-- release mode -> the folder needs to be called `static/`
+컴파일 모드에 따라 프런트엔드 폴더 이름을 맞춰야 합니다:
+- debug 모드 -> 폴더 이름이 `dist/`여야 합니다.
+- release 모드 -> 폴더 이름이 `static/`이어야 합니다.
 
-### Crate: Moonlight Web Streamer
-This is the streamer subprocess of the [web server](#crate-moonlight-web-server) and found at `streamer/`.
-It'll communicate via stdin and stdout with the web server to negotiate the WebRTC peers and then continue to communicate via the peer.
+<a id="crate-moonlight-web-streamer"></a>
+### 크레이트: Moonlight Web Streamer
+`streamer/`에 있는 [웹 서버](#crate-moonlight-web-server)의 스트리머 하위 프로세스입니다.
+웹 서버와 stdin/stdout으로 통신해 WebRTC 피어를 협상한 뒤, 해당 피어를 통해 통신을 이어갑니다.
