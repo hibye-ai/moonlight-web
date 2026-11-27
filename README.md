@@ -1,28 +1,18 @@
 # Moonlight Web — community fork
 
-This repository contains a modified version of [MrCreativ3001/moonlight-web-stream](https://github.com/MrCreativ3001/moonlight-web-stream), based on upstream [v2.10.0 (cd9d03c)](https://github.com/MrCreativ3001/moonlight-web-stream/commit/cd9d03cbf9a42b394f7b72a733a2f39cb5f0edd8). This is an unofficial fork.
+Stream apps from a [Sunshine](https://docs.lizardbyte.dev/projects/sunshine/latest/) PC to your browser over [WebRTC](https://webrtc.org/). The redesigned Moonlight Web console puts your PCs, streaming settings, and admin controls in one sidebar.
 
-The fork was modified in October–November 2026. It adds a redesigned web interface, revised keyboard and desktop controls, optional clipboard integration, streaming diagnostics, and WebRTC pacing changes. See [CHANGES.md](CHANGES.md) for the source snapshot and build instructions.
+![Moonlight Web library showing example PCs that are online, awaiting pairing, or offline](readme/library.png)
 
-The program is available under the GNU GPL version 3 or later. The original notices and [GPL text](LICENSE) remain in the repository. The bundled Pretendard font has its own [SIL Open Font License](web/resources/fonts/OFL-Pretendard.txt).
-
-## Upstream documentation
-
-The original instructions below describe upstream Moonlight Web. To build this fork from source, see [Build this fork](CHANGES.md#build-this-fork).
-
-
-# Moonlight Web
-An unofficial [Moonlight Client](https://moonlight-stream.org/) allowing you to stream your pc to the Web.
-It hosts a Web Server which will forward [Sunshine](https://docs.lizardbyte.dev/projects/sunshine/latest/) traffic to a Browser using the [WebRTC Api](https://webrtc.org/).
-
-![An image displaying: PC with sunshine and moonlight web installed, a browser making requests to it](/readme/structure.png)
+This unofficial [Moonlight](https://moonlight-stream.org/) client is based on [MrCreativ3001/moonlight-web-stream v2.10.0](https://github.com/MrCreativ3001/moonlight-web-stream/commit/cd9d03cbf9a42b394f7b72a733a2f39cb5f0edd8) and was modified in October–November 2026. See [CHANGES.md](CHANGES.md) for the source snapshot and changes. The project is [GPL-3.0-or-later](LICENSE). The bundled Pretendard font is under the [SIL Open Font License](web/resources/fonts/OFL-Pretendard.txt).
 
 ## Overview
 
+- [Web interface](#web-interface)
 - [Limitations](#limitations)
 - [Installation](#installation)
   - [Manual Installation](#install-manually)
-  - [Docker Installation](docker/README.md)
+  - [Docker Installation](#docker-installation)
 - [Setup](#setup)
   - [Streaming over the Internet](#streaming-over-the-internet)
   - [Configuring https](#configuring-https)
@@ -34,6 +24,22 @@ It hosts a Web Server which will forward [Sunshine](https://docs.lizardbyte.dev/
 - [Contributors](#contributors)
 - [Building](#building)
 
+## Web interface
+
+- **Library** shows your PCs and their connection status. Select a paired PC to browse and launch its apps.
+- **Settings** controls video, audio, input, and transport. You can set defaults for this browser and keep separate settings for individual PCs and apps.
+- **Admin** manages users and roles. The theme switch is at the bottom of the sidebar.
+- **While streaming**, use the on-screen controls to adjust input or check stream statistics. The optional [clipboard bridge](clipboard-bridge/README.md) connects the stream to the host clipboard.
+
+![Moonlight Web streaming settings showing the sidebar, settings groups, and bitrate controls](readme/settings.png)
+
+<details>
+<summary>How the connection works</summary>
+
+![Connection diagram showing a browser connecting to Moonlight Web and Moonlight Web connecting to Sunshine](readme/structure.png)
+
+</details>
+
 ## Limitations
 - Features that only work in a [Secure Context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts#:~:text=They%20must%20be,be%20considered%20deprecated.) -> [How to configure a Secure Context / https](#configuring-https)
   - Controllers: [Gamepad API](https://developer.mozilla.org/en-US/docs/Web/API/Gamepad_API)
@@ -42,27 +48,35 @@ It hosts a Web Server which will forward [Sunshine](https://docs.lizardbyte.dev/
 
 ## Installation
 
-You can install it [manually](#install-manually) or with [docker](docker/README.md)
+Build this fork [manually](#install-manually) or [with Docker](#docker-installation).
 
 ### Install Manually
 
-1. Install [Sunshine](https://github.com/LizardByte/Sunshine/blob/v2025.628.4510/docs/getting_started.md)
+1. Install [Sunshine](https://docs.lizardbyte.dev/projects/sunshine/latest/) on the PC you want to stream from.
+2. [Build the fork](#building), then run the `web-server` executable with the `streamer` executable and frontend files in place.
+3. Open `http://localhost:8080` on the machine running Moonlight Web. You can change the [bind address](#bind-address).
 
-2. Download the [compressed archive](https://github.com/MrCreativ3001/moonlight-web-stream/releases/latest) for your platform and uncompress it or [build it yourself](#building)
+### Docker Installation
 
-3. Run the "web-server" executable
+From the root of this checkout, build the image and start a local instance:
 
-4. Go to `localhost:8080` and view the web interface. You can also the change [bind address](#bind-address).
+```sh
+docker build -t moonlight-web-fork -f docker/Dockerfile.source .
+docker run --rm --name moonlight-web \
+  -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:40000-40100:40000-40100/udp \
+  -v moonlight-server:/moonlight-web/server \
+  moonlight-web-fork
+```
+
+For access from other devices, see [Setup](#setup) and [Configuring HTTPS](#configuring-https). The [upstream Docker guide](docker/README.md) describes the original project's published image.
 
 ## Setup
 
-1. Add a new user by typing in your name and password. The first user to login will be created and will be the admin.
-
-2. Add a new pc (<img src="web/resources/ic_add_to_queue_white_48px.svg" alt="icon" style="height:1em; vertical-align:middle;">) with the address as `localhost` and leave the port empty (if you've got the default port)
-
-2. Pair your pc by clicking on the host (<img src="web/resources/desktop_windows-48px.svg" alt="icon" style="height:1em; vertical-align:middle;">). Then enter the code in sunshine
-
-3. Launch an app
+1. Choose a username and password. With the default configuration, the first login creates the administrator account.
+2. In **Library**, select **Add PC** and enter the Sunshine host's address. Use an address reachable from the Moonlight Web server, and leave the port blank when using Sunshine's default port.
+3. Select the new PC and enter the pairing PIN in Sunshine.
+4. Open the paired PC and select an app. Use **Settings** to adjust video, audio, and input before starting a stream.
 
 ### Streaming over the Internet
 
@@ -278,7 +292,7 @@ Most options have command line arguments or environment variables associated wit
 ./web-server help
 ```
 
-For a full list of values look into the [Rust Config module](moonlight-web/common/src/config.rs).
+For the full list of values, see the [Rust config module](common/src/config.rs).
 
 ### Bind Address 
 The address and port the website will run on
@@ -547,11 +561,12 @@ Other changes:
 - Thanks to [@Idefix2020](https://github.com/Idefix2020) for fixing the context menu and implementing caching for app images
 
 ## Building
-Make sure you've cloned this repo with all it's submodules
+Clone this fork:
 ```sh
-git clone https://github.com/MrCreativ3001/moonlight-web-stream.git
+git clone https://github.com/hibye-ai/moonlight-web.git
+cd moonlight-web
 ```
-A [Rust](https://www.rust-lang.org/tools/install) [nightly](https://rust-lang.github.io/rustup/concepts/channels.html) installation is required.
+Use Node.js 24 and the [Rust](https://www.rust-lang.org/tools/install) nightly pinned in [rust-toolchain.toml](rust-toolchain.toml). See [Build this fork](CHANGES.md#build-this-fork) for the Docker build and native dependencies.
 
 There are 2 ways to build Moonlight Web:
 - Build it on your system
@@ -576,7 +591,7 @@ It'll spawn a multiple [streamers](#crate-moonlight-web-server) as a subprocess 
 
 Build the web frontend with [npm](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm).
 ```sh
-npm install
+npm ci
 npm run build
 ```
 The build output will be in `dist/`.
