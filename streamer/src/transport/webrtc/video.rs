@@ -133,6 +133,7 @@ impl WebRtcVideo {
                     StreamServerMessage::DebugLog {
                         message,
                         ty: Some(LogMessageType::FatalDescription),
+                        code: None,
                     },
                 )))
                 .await
@@ -191,6 +192,7 @@ impl WebRtcVideo {
                     StreamServerMessage::DebugLog {
                         message,
                         ty: Some(LogMessageType::FatalDescription),
+                        code: None,
                     },
                 )))
                 .await

@@ -148,6 +148,56 @@ async fn child(
 }
 
 #[actix_web::test]
+async fn host_app_rejection_reaches_control_socket_before_close() {
+    let fixture = Fixture::new("app-rejected").await;
+    let (response, session, stream, _frames) = websocket().await;
+    let script = r#"
+import sys
+sys.stdin.readline()
+print('"HostAppLaunchRejected"')
+sys.stdin.readline()
+"#;
+    let (child, stdin, stdout, cleanup) = child(script).await;
+    let guard = acquire_stream_session_lock(fixture.user_id, 8003).await;
+    let control = run_stream_control(
+        fixture.app.clone(),
+        UserAuth::Session(fixture.token),
+        fixture.permissions().await,
+        session,
+        stream,
+        child,
+        stdin,
+        stdout,
+        ServerIpcMessage::Stop,
+        guard,
+        StreamDiagnosticGuard::new(8003, 1),
+    );
+
+    timeout(Duration::from_secs(4), control)
+        .await
+        .expect("rejection should close the session and reap the waiting streamer");
+    assert!(!process_exists(cleanup.0));
+
+    let wire = actix_web::body::to_bytes(response.into_body())
+        .await
+        .expect("WebSocket response frames");
+    assert_eq!(wire[0..2], [0x81, 126], "first frame is the fatal text");
+    let end = 4 + usize::from(u16::from_be_bytes([wire[2], wire[3]]));
+    let json: serde_json::Value = serde_json::from_slice(&wire[4..end]).expect("fatal JSON");
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "DebugLog": {
+                "message": "The host could not launch the selected app. Check it on the host, then reconnect.",
+                "ty": "fatalDescription",
+                "code": "hostAppLaunchRejected",
+            }
+        })
+    );
+    assert_eq!(&wire[end..], &[0x88, 0], "close follows the fatal notice");
+}
+
+#[actix_web::test]
 async fn control_close_reaps_hostile_child_retaining_stdout_and_releases_lock() {
     let fixture = Fixture::new("hostile").await;
     let (response, session, stream, frames) = websocket().await;

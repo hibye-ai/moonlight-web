@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::Context as _;
 use common::{
     api_bindings::{
         GeneralClientMessage, GeneralServerMessage, LogMessageType, StreamClientMessage,
@@ -24,7 +25,7 @@ use common::{
 use moonlight_common::{
     MoonlightError,
     crypto::openssl::OpenSSLCryptoBackend,
-    high::{MoonlightClientError, StreamConfigError, tokio::MoonlightHost},
+    high::{StreamConfigError, tokio::MoonlightHost},
     http::{
         ClientIdentifier, ClientSecret, ServerIdentifier, client::tokio_hyper::TokioHyperClient,
     },
@@ -60,6 +61,7 @@ use tracing_subscriber::{EnvFilter, Registry, fmt, layer::SubscriberExt, util::S
 use crate::{
     audio::StreamAudioDecoder,
     dynamic_ice_servers::load_dynamic_ice_servers,
+    host_launch::HostLaunchFailure,
     transport::{
         InboundPacket, OutboundPacket, TransportError, TransportEvent, TransportEvents,
         TransportSender, web_socket,
@@ -76,6 +78,7 @@ mod audio;
 mod buffer;
 mod convert;
 mod dynamic_ice_servers;
+mod host_launch;
 mod transport;
 mod video;
 
@@ -98,6 +101,7 @@ async fn main() {
             StreamServerMessage::DebugLog {
                 message: "Completed Stage: Launch Streamer".to_string(),
                 ty: None,
+                code: None,
             },
         ))
         .await;
@@ -160,6 +164,12 @@ async fn main() {
     let env_filter = EnvFilter::builder()
         .with_default_directive(config_level_filter.into())
         .from_env_lossy()
+        // The dependency's debug logs include full request URLs and XML responses.
+        .add_directive(
+            "moonlight_common::http::client::tokio_hyper=off"
+                .parse()
+                .expect("valid Moonlight HTTP tracing directive"),
+        )
         .add_directive(
             "webrtc_sctp=off"
                 .parse()
@@ -182,6 +192,7 @@ async fn main() {
             StreamServerMessage::DebugLog {
                 message: "Waiting for Transport to negotiate".to_string(),
                 ty: None,
+                code: None,
             },
         ))
         .await;
@@ -367,9 +378,13 @@ impl StreamConnection {
                                 this.clear_terminate_request().await;
 
                                 if let Err(err) = this.start_stream(settings).await {
-                                    error!("Failed to start stream, stopping: {err}");
-
-                                    this.stop().await;
+                                    if matches!(err.downcast_ref(), Some(&HostLaunchFailure::Rejected)) {
+                                        // The server forwards the final reason before sending Stop.
+                                        this.ipc_sender.clone().send(StreamerIpcMessage::HostAppLaunchRejected).await;
+                                    } else {
+                                        error!("Failed to start stream, stopping: {err}");
+                                        this.stop().await;
+                                    }
                                 }
                             });
                         }
@@ -720,6 +735,7 @@ impl StreamConnection {
                 StreamServerMessage::DebugLog {
                     message: "Moonlight Stream".to_string(),
                     ty: None,
+                    code: None,
                 },
             ))
             .await;
@@ -764,9 +780,15 @@ impl StreamConnection {
             enable_mic: false,
         };
 
-        let server_version = host.version().await?;
-        let server_gfe_version = host.gfe_version().await?;
-        let server_codec_mode_support = host.server_codec_mode_support().await?;
+        let server_version = host.version().await.context("failed to query host version")?;
+        let server_gfe_version = host
+            .gfe_version()
+            .await
+            .context("failed to query host GFE version")?;
+        let server_codec_mode_support = host
+            .server_codec_mode_support()
+            .await
+            .context("failed to query host codec support")?;
 
         match settings.adjust_for_server(
             server_version,
@@ -781,6 +803,7 @@ impl StreamConnection {
                             message: "Failed to start stream because this app doesn't support HDR!"
                                 .to_string(),
                             ty: Some(LogMessageType::FatalDescription),
+                            code: None,
                         },
                     ))
                     .await;
@@ -792,6 +815,7 @@ impl StreamConnection {
         let aes_key = AesKey::new_random(&OpenSSLCryptoBackend)?;
         let aes_iv = AesIv::new_random(&OpenSSLCryptoBackend)?;
 
+        let launch_started = Instant::now();
         let stream_config = match host
             .start_stream(
                 self.info.app_id,
@@ -802,23 +826,26 @@ impl StreamConnection {
             )
             .await
         {
-            Ok(value) => value,
+            Ok(value) => {
+                info!(
+                    elapsed_ms = launch_started.elapsed().as_millis() as u64,
+                    outcome = "accepted",
+                    "Host start request finished"
+                );
+                value
+            }
             Err(err) => {
-                warn!("[Stream]: failed to start moonlight stream: {err}");
-
-                #[allow(clippy::single_match)]
-                match err {
-                    MoonlightClientError::Moonlight(MoonlightError::ConnectionAlreadyExists) => {
-                        ipc_sender
-                            .send(StreamerIpcMessage::WebSocket(
-                                StreamServerMessage::DebugLog { message: "Failed to start stream because this streamer is already streaming".to_string(), ty: None },
-                            ))
-                            .await;
-                    }
-                    _ => {}
+                let failure = HostLaunchFailure::from(&err);
+                warn!(
+                    elapsed_ms = launch_started.elapsed().as_millis() as u64,
+                    outcome = failure.outcome(),
+                    "Host start request finished"
+                );
+                if failure == HostLaunchFailure::AlreadyActive {
+                    self.report_active_stream_conflict().await;
                 }
-
-                return Err(err.into());
+                // Do not propagate the dependency's error: it can contain host response text.
+                return Err(failure.into());
             }
         };
 
@@ -834,7 +861,11 @@ impl StreamConnection {
                 audio_decoder,
             )
         })
-        .await??;
+        .await?;
+        if matches!(stream, Err(MoonlightError::ConnectionAlreadyExists)) {
+            self.report_active_stream_conflict().await;
+        }
+        let stream = stream.context("failed to start Moonlight connection")?;
 
         let host_features = stream.host_features().unwrap_or_else(|err| {
             warn!("[Stream]: failed to get host features: {err:?}");
@@ -900,6 +931,20 @@ impl StreamConnection {
         }
 
         Ok(())
+    }
+
+    async fn report_active_stream_conflict(&self) {
+        self.ipc_sender
+            .clone()
+            .send(StreamerIpcMessage::WebSocket(
+                StreamServerMessage::DebugLog {
+                    message: "Failed to start stream because this streamer is already streaming"
+                        .into(),
+                    ty: None,
+                    code: None,
+                },
+            ))
+            .await;
     }
 
     // -- Termination
@@ -1097,6 +1142,7 @@ impl ConnectionListenerC for StreamConnectionListener {
                     StreamServerMessage::DebugLog {
                         message: format!("Starting Stage: {}", stage.name()),
                         ty: None,
+                        code: None,
                     },
                 ))
                 .await;
@@ -1114,6 +1160,7 @@ impl ConnectionListenerC for StreamConnectionListener {
             StreamServerMessage::DebugLog {
                 message: format!("Completed Stage: {}", stage.name()),
                 ty: None,
+                code: None,
             },
         ));
     }
@@ -1133,6 +1180,7 @@ impl ConnectionListenerC for StreamConnectionListener {
                     error_code
                 ),
                 ty: Some(LogMessageType::Fatal),
+                code: None,
             },
         ));
     }

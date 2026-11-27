@@ -543,6 +543,13 @@ pub enum LogMessageType {
 
 #[derive(Serialize, Deserialize, Debug, TS)]
 #[ts(export, export_to = EXPORT_PATH)]
+#[serde(rename_all = "camelCase")]
+pub enum StreamStartupError {
+    HostAppLaunchRejected,
+}
+
+#[derive(Serialize, Deserialize, Debug, TS)]
+#[ts(export, export_to = EXPORT_PATH)]
 pub enum StreamServerMessage {
     Setup {
         ice_servers: Vec<RtcIceServer>,
@@ -555,6 +562,9 @@ pub enum StreamServerMessage {
     DebugLog {
         message: String,
         ty: Option<LogMessageType>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        code: Option<StreamStartupError>,
     },
     ConnectionComplete {
         capabilities: StreamCapabilities,

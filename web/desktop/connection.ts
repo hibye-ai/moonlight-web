@@ -10,16 +10,20 @@ import { DiagnosticsBus } from "./diagnostics.js"
 
 export type ConnectionState = "connecting" | "connected" | "reconnecting" | "offline" | "authRequired" | "stalled" | "failed" | "stopped"
 
-export type ConnectionReason = "cancelled" | "exhausted" | "terminated" | "fatal" | "authDenied" | "offline" | "stalled" | "decoderStalled" | "stopped" | null
+export type ConnectionReason = "cancelled" | "exhausted" | "terminated" | "fatal" | "hostAppLaunchRejected" | "authDenied" | "offline" | "stalled" | "decoderStalled" | "stopped" | null
+
+export type StartupStage = "controlSocketOpen" | "hostStreamReady" | "webrtcPeerConnected" | "firstVideoTrack" | "firstVideoPacket" | "finished"
+export type StartupOutcome = "videoReady" | "hostAppLaunchRejected" | "fatal" | "terminated" | "hostStartTimeout" | "socketClosed" | "fallback" | "transportFailed" | "cancelled" | "stopped" | "restarted"
 
 export type StreamLifecycle =
+    { phase: "startupTiming", stage: StartupStage, outcome?: StartupOutcome, elapsedMs: number, transport: "webrtc" | "websocket" | "unknown" } |
     { phase: "connecting" } |
     { phase: "connected" } |
     { phase: "socketClosed" } |
     { phase: "retryScheduled", attempt: number, max: number, delayMs: number } |
     { phase: "retryExhausted" } |
     { phase: "terminated", code?: number } |
-    { phase: "fatal" } |
+    { phase: "fatal", reason?: "fatal" | "hostAppLaunchRejected" } |
     { phase: "stopped" } |
     { phase: "cancelled" }
 
@@ -161,6 +165,11 @@ export class ConnectionController {
 
     onLifecycle(event: StreamLifecycle) {
         if (this.disposed) return
+        if (event.phase === "startupTiming") {
+            const { stage, outcome, elapsedMs, transport } = event
+            this.deps.diagnostics?.record("connection.startupTiming", { stage, outcome, elapsedMs, transport })
+            return
+        }
         if (this.manualStop && event.phase !== "stopped") return
         if ((this.authDenied || this.userCancelled || this.hostEnded) && event.phase !== "stopped") return
 
@@ -211,8 +220,13 @@ export class ConnectionController {
             case "fatal":
                 this.hostEnded = true
                 this.deps.target.releaseInput("disconnect")
-                this.setState("failed", "fatal")
-                void this.probeAfterFailure()
+                this.setState("failed", event.reason ?? "fatal")
+                if (event.reason === "hostAppLaunchRejected") {
+                    this.recoveryGeneration += 1
+                    this.clearVisibleTimer()
+                } else {
+                    void this.probeAfterFailure()
+                }
                 return
             case "cancelled":
                 if (this.state !== "failed") this.setState("failed", "cancelled")
@@ -326,7 +340,7 @@ export class ConnectionController {
 
     onOffline() {
         if (this.manualStop || this.disposed) return
-        if (this.state === "authRequired") return
+        if (this.state === "authRequired" || this.reason === "hostAppLaunchRejected") return
         this.enterOffline()
     }
 

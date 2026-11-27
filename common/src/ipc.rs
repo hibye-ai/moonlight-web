@@ -50,6 +50,7 @@ pub enum ServerIpcMessage {
 pub enum StreamerIpcMessage {
     WebSocket(StreamServerMessage),
     WebSocketTransport(Bytes),
+    HostAppLaunchRejected,
     Stop,
 }
 
@@ -274,6 +275,7 @@ mod redaction_tests {
             crate::api_bindings::StreamServerMessage::DebugLog {
                 message: USER_CONTENT.to_string(),
                 ty: None,
+                code: None,
             },
         ));
 

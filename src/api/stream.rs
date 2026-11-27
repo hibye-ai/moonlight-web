@@ -18,7 +18,7 @@ use actix_ws::{Closed, Message, Session};
 use common::{
     api_bindings::{
         LogMessageType, PostCancelRequest, PostCancelResponse, StreamClientMessage,
-        StreamServerMessage, TransportType,
+        StreamServerMessage, StreamStartupError, TransportType,
     },
     ipc::{IpcSender, ServerIpcMessage, StreamerConfig, StreamerIpcMessage, create_child_ipc},
     serialize_json,
@@ -438,6 +438,7 @@ pub async fn start_host(
                     StreamServerMessage::DebugLog {
                         message: "Launching streamer".to_string(),
                         ty: None,
+                        code: None,
                     },
                 )
                 .await;
@@ -566,6 +567,7 @@ async fn spawn_streamer(
                     StreamServerMessage::DebugLog {
                         message: "Failed to start stream because of a server error".to_string(),
                         ty: Some(LogMessageType::FatalDescription),
+                        code: None,
                     },
                 )
                 .await;
@@ -588,6 +590,7 @@ async fn spawn_streamer(
                 StreamServerMessage::DebugLog {
                     message: "Failed to start stream because of a server error".to_string(),
                     ty: Some(LogMessageType::FatalDescription),
+                    code: None,
                 },
             )
             .await;
@@ -705,6 +708,20 @@ async fn run_stream_control_with(
                             );
                             break;
                         }
+                    }
+                    StreamerIpcMessage::HostAppLaunchRejected => {
+                        // Queue the fatal notice before closing the control socket. The
+                        // streamer waits for our normal Stop/reap path after this message.
+                        let _ = send_ws_message(
+                            &mut session,
+                            StreamServerMessage::DebugLog {
+                                message: "The host could not launch the selected app. Check it on the host, then reconnect.".into(),
+                                ty: Some(LogMessageType::FatalDescription),
+                                code: Some(StreamStartupError::HostAppLaunchRejected),
+                            },
+                        )
+                        .await;
+                        break;
                     }
                     StreamerIpcMessage::Stop => {
                         debug!("[Ipc]: ipc receiver stopped by streamer");

@@ -11,6 +11,7 @@ import { StatValue, StreamStatsData } from "../stream/stats.js"
 //   * buildDiagnosticsReport: the JSON export, assembled from allowlisted fields only.
 
 export const DIAGNOSTIC_EVENT_CODES = [
+    "connection.startupTiming",
     "connection.connecting",
     "connection.connected",
     "connection.reconnecting",
@@ -53,7 +54,7 @@ export type DiagnosticEvent = {
 }
 
 const NUMBER_DETAIL_KEYS = new Set([
-    "attempt", "max", "delayMs", "code", "kbps", "targetKbps", "fromKbps", "count", "devices",
+    "attempt", "max", "delayMs", "elapsedMs", "code", "kbps", "targetKbps", "fromKbps", "count", "devices",
 ])
 
 const BOOLEAN_DETAIL_KEYS = new Set([
@@ -66,8 +67,10 @@ const AUDIO_STATES = ["playing", "muted", "autoplayBlocked", "unavailable", "tra
 /// Per-key enumerations for string details. Anything else is dropped.
 const STRING_DETAIL_VALUES: Record<string, ReadonlyArray<string>> = {
     state: [...CONNECTION_STATES, ...AUDIO_STATES],
+    stage: ["controlSocketOpen", "hostStreamReady", "webrtcPeerConnected", "firstVideoTrack", "firstVideoPacket", "finished"],
+    outcome: ["videoReady", "hostAppLaunchRejected", "fatal", "terminated", "hostStartTimeout", "socketClosed", "fallback", "transportFailed", "cancelled", "stopped", "restarted"],
     reason: [
-        "cancelled", "exhausted", "terminated", "fatal", "authDenied", "offline", "unreachable",
+        "cancelled", "exhausted", "terminated", "fatal", "hostAppLaunchRejected", "authDenied", "offline", "unreachable",
         "stalled", "decoderStalled", "manual", "online", "visible", "notSupported", "permission",
         "failed", "socketClosed", "stopped", "noPlayer", "trackEnded",
     ],

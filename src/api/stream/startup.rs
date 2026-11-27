@@ -174,6 +174,7 @@ async fn notify_and_close(mut session: actix_ws::Session, message: &'static str)
                 serde_json::to_string(&StreamServerMessage::DebugLog {
                     message: message.to_string(),
                     ty: Some(LogMessageType::FatalDescription),
+                    code: None,
                 })
                 .unwrap_or_default(),
             )

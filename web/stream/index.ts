@@ -16,7 +16,7 @@ import { WebRTCTransport } from "./transport/webrtc.js"
 import { allVideoCodecs, andVideoCodecs, createSupportedVideoFormatsBits, emptyVideoCodecs, getSelectedVideoCodec, hasAnyCodec, VideoCodecSupport } from "./video.js"
 import { VideoRenderer } from "./video/index.js"
 import { buildVideoPipeline, VideoPipelineOptions } from "./video/pipeline.js"
-import { StreamLifecycle } from "../desktop/connection.js"
+import { StartupOutcome, StartupStage, StreamLifecycle } from "../desktop/connection.js"
 import { AudioJitterPolicyMode } from "./transport/audio_policy.js"
 
 export type ExecutionEnvironment = {
@@ -91,6 +91,7 @@ function isFirefox(): boolean {
 }
 
 const WEBRTC_CONNECT_TIMEOUT_MS = 15000
+const WEBRTC_HOST_START_TIMEOUT_MS = 45000
 const FALLBACK_RECONNECT_DELAY_MS = 500
 const CONTROL_RECONNECT_BASE_DELAY_MS = 750
 const CONTROL_RECONNECT_MAX_DELAY_MS = 5000
@@ -133,6 +134,10 @@ export class Stream implements Component {
     private controlReconnectTimer: number | null = null
     private restartingControlSocket = false
     private stopping = false
+    private hostAppLaunchRejected = false
+    private pendingWebRtcNegotiation: { hostReady(): void, cancel(): void } | null = null
+    private startupStartedAt = 0
+    private startupFinished = false
     private connectionGeneration = 0
     private controlSocketCancelled = false
 
@@ -216,7 +221,22 @@ export class Stream implements Component {
         })
         this.eventTarget.dispatchEvent(event)
     }
+    private recordStartup(stage: StartupStage, outcome?: StartupOutcome) {
+        this.emitLifecycle({
+            phase: "startupTiming",
+            stage,
+            outcome,
+            elapsedMs: Math.round(performance.now() - this.startupStartedAt),
+            transport: this.getTransportKind(),
+        })
+    }
+    private finishStartup(outcome: StartupOutcome) {
+        if (this.startupFinished) return
+        this.startupFinished = true
+        this.recordStartup("finished", outcome)
+    }
     private resetVideoReadyState() {
+        this.pendingWebRtcNegotiation?.cancel()
         this.hasConnectionComplete = false
         this.hasVideoReady = false
         this.hasDispatchedVideoReady = false
@@ -229,8 +249,10 @@ export class Stream implements Component {
         this.controlReconnectAttempts = 0
         this.tryDispatchVideoReady()
     }
-    private markVideoReady() {
+    private markVideoReady(stage: "firstVideoTrack" | "firstVideoPacket") {
+        if (this.hasVideoReady) return
         this.hasVideoReady = true
+        this.recordStartup(stage)
         this.tryDispatchVideoReady()
     }
     private tryDispatchVideoReady() {
@@ -239,6 +261,7 @@ export class Stream implements Component {
         }
 
         this.hasDispatchedVideoReady = true
+        this.finishStartup("videoReady")
         const event: InfoEvent = new CustomEvent("stream-info", {
             detail: { type: "videoReady" }
         })
@@ -252,10 +275,15 @@ export class Stream implements Component {
         if ("DebugLog" in message) {
             const debugLog = message.DebugLog
             if (debugLog.ty === "fatal" || debugLog.ty === "fatalDescription") {
+                this.stopping = true
                 this.autoReconnectEnabled = false
+                this.hostAppLaunchRejected = debugLog.code === "hostAppLaunchRejected"
                 this.clearControlReconnectTimer()
+                this.pendingWebRtcNegotiation?.cancel()
                 this.releaseInput()
-                this.emitLifecycle({ phase: "fatal" })
+                const reason = this.hostAppLaunchRejected ? "hostAppLaunchRejected" : "fatal"
+                this.finishStartup(reason)
+                this.emitLifecycle({ phase: "fatal", reason })
             }
 
             this.debugLog(debugLog.message, {
@@ -268,6 +296,8 @@ export class Stream implements Component {
 
             this.eventTarget.dispatchEvent(event)
         } else if ("ConnectionComplete" in message) {
+            this.recordStartup("hostStreamReady")
+            this.pendingWebRtcNegotiation?.hostReady()
             const capabilities = message.ConnectionComplete.capabilities
             const formatRaw = message.ConnectionComplete.format
             const width = message.ConnectionComplete.width
@@ -339,6 +369,8 @@ export class Stream implements Component {
             } else {
                 this.stopping = true
                 this.clearControlReconnectTimer()
+                this.pendingWebRtcNegotiation?.cancel()
+                this.finishStartup("terminated")
                 this.input.releaseAll()
                 this.debugLog(`ConnectionTerminated with code ${code}`, { type: "fatalDescription" })
                 this.emitLifecycle({ phase: "terminated", code })
@@ -351,9 +383,7 @@ export class Stream implements Component {
             this.iceServers = iceServers
 
             this.debugLog(`window.isSecureContext: ${window.isSecureContext}`)
-            this.debugLog(`Using WebRTC Ice Servers: ${createPrettyList(
-                iceServers.map(server => server.urls).reduce((list, url) => list.concat(url), [])
-            )}`)
+            this.debugLog(`Configured WebRTC ICE servers: ${iceServers.length}`)
 
             await this.startConnection()
         }
@@ -378,28 +408,27 @@ export class Stream implements Component {
 
         if (desiredTransport == "auto") {
             const shutdownReason = await this.tryWebRTCTransport()
-            if (generation != this.connectionGeneration || this.stopping) {
+            if (!this.connectionCurrent(generation) || this.ws.readyState !== WebSocket.OPEN) {
                 return
             }
 
             if (shutdownReason == "failednoconnect") {
-                this.webRtcFallbackCount++
-                this.debugLog("Failed to establish WebRTC connection. Falling back to Web Socket transport.", { type: "ifErrorDescription" })
-                await this.restartWithFreshTransportFallback("websocket")
+                await this.restartWithFreshTransportFallback()
                 return
             }
         } else if (desiredTransport == "webrtc") {
             await this.tryWebRTCTransport()
-            if (generation != this.connectionGeneration || this.stopping) {
+            if (!this.connectionCurrent(generation) || this.ws.readyState !== WebSocket.OPEN) {
                 return
             }
         } else if (desiredTransport == "websocket") {
             await this.tryWebSocketTransport()
-            if (generation != this.connectionGeneration || this.stopping) {
+            if (!this.connectionCurrent(generation) || this.ws.readyState !== WebSocket.OPEN) {
                 return
             }
         }
 
+        this.finishStartup("transportFailed")
         this.debugLog("Tried all configured transport options but no connection was possible", { type: "fatal" })
         this.input.releaseAll()
         this.emitLifecycle({ phase: "fatal" })
@@ -409,15 +438,17 @@ export class Stream implements Component {
 
     private createControlWebSocket(): WebSocket {
         this.controlSocketCancelled = false
+        this.startupStartedAt = performance.now()
+        this.startupFinished = false
         const generation = this.connectionGeneration
         const wsApiHost = this.api.host_url.replace(/^http(s)?:/, "ws$1:")
         const ws = new WebSocket(`${wsApiHost}/host/stream`)
 
-        ws.addEventListener("error", (event) => {
+        ws.addEventListener("error", () => {
             if (this.ws !== ws || !this.connectionCurrent(generation)) {
                 return
             }
-            this.onError(event)
+            this.debugLog("Control WebSocket error")
         })
         ws.addEventListener("open", () => {
             if (this.ws !== ws || !this.connectionCurrent(generation)) {
@@ -450,9 +481,17 @@ export class Stream implements Component {
             }
         })
     }
-    private async restartWithFreshTransportFallback(transport: TransportType): Promise<void> {
+    private async restartWithFreshTransportFallback(): Promise<void> {
+        const failedGeneration = this.connectionGeneration
+        // Keep the current control socket authoritative while fallback is pending.
+        await new Promise((resolve) => window.setTimeout(resolve, FALLBACK_RECONNECT_DELAY_MS))
+        if (!this.connectionCurrent(failedGeneration) || this.ws.readyState !== WebSocket.OPEN) return
+        this.webRtcFallbackCount++
+        this.finishStartup("fallback")
+        this.debugLog("Failed to establish WebRTC connection. Falling back to Web Socket transport.", { type: "ifErrorDescription" })
+
         const generation = ++this.connectionGeneration
-        this.transportOverride = transport
+        this.transportOverride = "websocket"
         this.resetVideoReadyState()
         this.restartingControlSocket = true
 
@@ -477,8 +516,6 @@ export class Stream implements Component {
                     }, { once: true })
                 })
             }
-
-            await new Promise((resolve) => window.setTimeout(resolve, FALLBACK_RECONNECT_DELAY_MS))
 
             if (!this.connectionCurrent(generation)) {
                 return
@@ -643,7 +680,7 @@ export class Stream implements Component {
         this.setTransport(transport)
 
         const videoCodecSupport = await this.createPipelines()
-        if (!this.connectionCurrent(generation)) return "failednoconnect"
+        if (!this.connectionCurrent(generation) || this.ws.readyState !== WebSocket.OPEN) return "failednoconnect"
         if (!videoCodecSupport) {
             this.debugLog("No video pipeline was found for the codec that was specified. If you're unsure which codecs are supported use H264.", { type: "fatalDescription" })
 
@@ -651,33 +688,56 @@ export class Stream implements Component {
             return "failednoconnect"
         }
 
-        // Starting the stream will start negotiation
-        await this.startStream(videoCodecSupport)
-        if (!this.connectionCurrent(generation)) return "failednoconnect"
-
-        // Wait for negotiation, but don't let a stuck ICE check block fallback forever.
-        const result = await new Promise<boolean>((resolve) => {
-            const timeout = window.setTimeout(async () => {
-                if (!this.connectionCurrent(generation)) { resolve(false); return }
-                this.debugLog(`WebRTC negotiation timed out after ${WEBRTC_CONNECT_TIMEOUT_MS}ms`)
+        const negotiation = new Promise<boolean>((resolve) => {
+            let hostReady = false
+            let transportFailed = false
+            let timer: number
+            const finish = (connected: boolean) => {
+                window.clearTimeout(timer)
                 transport.onconnect = null
                 transport.onclose = null
-                await transport.close()
-                resolve(false)
-            }, WEBRTC_CONNECT_TIMEOUT_MS)
+                this.pendingWebRtcNegotiation = null
+                resolve(connected)
+            }
 
+            // Before the host result arrives, a peer failure is provisional.
+            // Keep signaling open so it can carry the final startup outcome.
+            timer = window.setTimeout(() => {
+                this.finishStartup("hostStartTimeout")
+                finish(false)
+                this.ws.close()
+            }, WEBRTC_HOST_START_TIMEOUT_MS)
+            this.pendingWebRtcNegotiation = {
+                hostReady: () => {
+                    if (hostReady) return
+                    hostReady = true
+                    if (transportFailed) {
+                        finish(false)
+                    } else {
+                        window.clearTimeout(timer)
+                        timer = window.setTimeout(() => finish(false), WEBRTC_CONNECT_TIMEOUT_MS)
+                    }
+                },
+                cancel: () => finish(false),
+            }
             transport.onconnect = () => {
-                window.clearTimeout(timeout)
-                resolve(true)
+                this.recordStartup("webrtcPeerConnected")
+                finish(true)
             }
             transport.onclose = () => {
-                window.clearTimeout(timeout)
-                resolve(false)
+                transportFailed = true
+                if (hostReady) finish(false)
             }
         })
+
+        // ConnectionComplete is sent before or during signaling.
+        await this.startStream(videoCodecSupport)
+        const result = await negotiation
+        if (!this.connectionCurrent(generation) || this.ws.readyState !== WebSocket.OPEN) return "failednoconnect"
         this.debugLog(`WebRTC negotiation success: ${result}`)
 
         if (!result) {
+            await transport.close()
             return "failednoconnect"
         }
 
@@ -706,7 +766,7 @@ export class Stream implements Component {
         this.setTransport(transport)
 
         const videoCodecSupport = await this.createPipelines()
-        if (!this.connectionCurrent(generation)) return
+        if (!this.connectionCurrent(generation) || this.ws.readyState !== WebSocket.OPEN) return
         if (!videoCodecSupport) {
             this.debugLog("Failed to start stream because no video pipeline with support for the specified codec was found!", { type: "fatalDescription" })
             return
@@ -801,7 +861,7 @@ export class Stream implements Component {
 
             video.addTrackListener((track) => {
                 if (!this.connectionCurrent(generation)) return
-                this.markVideoReady()
+                this.markVideoReady("firstVideoTrack")
                 videoRenderer.setTrack(track)
             })
 
@@ -821,7 +881,7 @@ export class Stream implements Component {
             video.addReceiveListener((data) => {
                 if (!this.connectionCurrent(generation)) return
                 this.dataVideoPackets = (this.dataVideoPackets ?? 0) + 1
-                this.markVideoReady()
+                this.markVideoReady("firstVideoPacket")
                 videoRenderer.submitPacket(data)
 
                 // data pipeline support requesting idrs over video channel
@@ -951,6 +1011,7 @@ export class Stream implements Component {
     private wsSendBuffer: Array<string> = []
 
     private onWsOpen() {
+        this.recordStartup("controlSocketOpen")
         this.debugLog(`Web Socket Open`)
 
         for (const raw of this.wsSendBuffer.splice(0)) {
@@ -962,6 +1023,8 @@ export class Stream implements Component {
         if (this.stopping || this.restartingControlSocket) {
             return
         }
+        this.pendingWebRtcNegotiation?.cancel()
+        this.finishStartup("socketClosed")
         // Keys/buttons held on the old connection would otherwise stay "down" locally.
         this.input.releaseAll()
         this.emitLifecycle({ phase: "socketClosed" })
@@ -1044,7 +1107,7 @@ export class Stream implements Component {
     /// settings. Starts a fresh control socket (which restarts the stream on the host) and a
     /// fresh retry budget. Refused once the stream was stopped.
     reconnect(reason: string = "manual"): Promise<boolean> {
-        if (this.userStopped) {
+        if (this.userStopped || (this.hostAppLaunchRejected && reason !== "manual")) {
             return Promise.resolve(false)
         }
         if (this.manualReconnectInFlight) {
@@ -1057,6 +1120,8 @@ export class Stream implements Component {
             // A host-side termination stops automatic retries; an explicit reconnect may
             // start over. A user stop (stop()) is final and handled above.
             this.stopping = false
+            this.hostAppLaunchRejected = false
+            this.finishStartup("restarted")
             this.clearControlReconnectTimer()
             this.controlReconnectAttempts = 0
             this.autoReconnectEnabled = true
@@ -1130,6 +1195,8 @@ export class Stream implements Component {
         const hadTimer = this.controlReconnectTimer !== null
         this.clearControlReconnectTimer()
         if (!this.hasDispatchedVideoReady || this.restartingControlSocket || this.ws.readyState !== WebSocket.OPEN) {
+            this.finishStartup("cancelled")
+            this.pendingWebRtcNegotiation?.cancel()
             this.connectionGeneration += 1
             this.controlSocketCancelled = true
             this.restartingControlSocket = false
@@ -1212,12 +1279,6 @@ export class Stream implements Component {
         return this.userStopped
     }
 
-    private onError(event: Event) {
-        this.debugLog(`Web Socket or WebRtcPeer Error`)
-
-        console.error(`Web Socket or WebRtcPeer Error`, event)
-    }
-
     private sendWsMessage(message: StreamClientMessage) {
         if (this.controlSocketCancelled || this.stopping) return
         const raw = JSON.stringify(message)
@@ -1252,6 +1313,8 @@ export class Stream implements Component {
         this.userStopped = true
         this.connectionGeneration += 1
         this.clearControlReconnectTimer()
+        this.pendingWebRtcNegotiation?.cancel()
+        this.finishStartup("stopped")
         this.input.releaseAll()
         this.emitLifecycle({ phase: "stopped" })
 
@@ -1286,8 +1349,4 @@ export class Stream implements Component {
     getStreamerSize(): [number, number] {
         return this.streamerSize
     }
-}
-
-function createPrettyList(list: Array<string>): string {
-    return `[${list.join(", ")}]`
 }
