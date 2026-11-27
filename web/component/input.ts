@@ -37,6 +37,7 @@ export type InputInit = {
     hasEnableCheckbox?: boolean
     placeholer?: string
     formRequired?: boolean
+    autocomplete?: AutoFill
     // Only allowed with type == "number"
     numberSlider?: {
         range_min: number,
@@ -59,7 +60,13 @@ export class InputComponent extends ElementWithLabel {
         super(internalName, displayName)
         const i = getTranslations(getCurrentLanguage()).common
 
-        this.div.classList.add("input-div")
+        this.div.classList.add("input-div", `input-${type}`)
+        if (init?.numberSlider) {
+            this.div.classList.add("has-slider")
+        }
+        if (init?.hasEnableCheckbox) {
+            this.div.classList.add("has-enable")
+        }
 
         this.input.id = internalName
         this.input.type = type
@@ -83,6 +90,9 @@ export class InputComponent extends ElementWithLabel {
         }
         if (init && init.formRequired != null) {
             this.input.required = init.formRequired
+        }
+        if (init?.autocomplete != null) {
+            this.input.autocomplete = init.autocomplete
         }
         if (init && init.placeholer != null) {
             this.input.placeholder = init.placeholer
@@ -135,6 +145,11 @@ export class InputComponent extends ElementWithLabel {
             this.numberSlider.max = `${init.numberSlider.range_max}`
             this.numberSlider.step = init.step?.toString() ?? ""
 
+            this.numberSlider.addEventListener("input", () => {
+                if (this.numberSlider) {
+                    this.input.value = this.numberSlider.value
+                }
+            })
             this.numberSlider.addEventListener("change", () => {
                 if (this.numberSlider) {
                     this.input.value = this.numberSlider.value
@@ -242,6 +257,11 @@ export class SelectComponent extends ElementWithLabel {
     constructor(internalName: string, options: Array<{ value: string, name: string }>, init?: SelectInit) {
         super(internalName, init?.displayName)
 
+        // Every select strategy must share the same field-row structure.
+        // Previously only the custom polyfill received input-div, which made
+        // native <select> controls bypass the modern settings layout.
+        this.div.classList.add("input-div", "input-select")
+
         if (init && init.preSelectedOption) {
             this.preSelectedOption = init.preSelectedOption
         }
@@ -254,7 +274,6 @@ export class SelectComponent extends ElementWithLabel {
             wrapper.classList.add("select-polyfill-wrapper")
 
             this.div.appendChild(wrapper)
-            this.div.classList.add("input-div")
 
             const display = document.createElement("p")
             display.classList.add("select-polyfill-display")

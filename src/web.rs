@@ -7,10 +7,16 @@ use crate::app::App;
 
 pub fn web_service() -> impl HttpServiceFactory {
     #[cfg(debug_assertions)]
-    let files = Files::new("/", "dist").index_file("index.html");
+    let files = Files::new("/", "dist")
+        .index_file("index.html")
+        .use_etag(true)
+        .use_last_modified(true);
 
     #[cfg(not(debug_assertions))]
-    let files = Files::new("/", "static").index_file("index.html");
+    let files = Files::new("/", "static")
+        .index_file("index.html")
+        .use_etag(true)
+        .use_last_modified(true);
 
     files
 }
@@ -36,5 +42,11 @@ async fn config_js(app: Data<App>) -> HttpResponse {
 
     HttpResponse::Ok()
         .append_header(("Content-Type", "text/javascript"))
+        .append_header((
+            "Cache-Control",
+            "no-store, no-cache, must-revalidate, private",
+        ))
+        .append_header(("Pragma", "no-cache"))
+        .append_header(("Expires", "0"))
         .body(config_js)
 }

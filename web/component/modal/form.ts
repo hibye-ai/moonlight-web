@@ -8,6 +8,7 @@ export abstract class FormModal<Output> implements Component, Modal<Output | nul
     private mounted: boolean = false
     private submitButton: HTMLButtonElement = document.createElement("button")
     private cancelButton: HTMLButtonElement = document.createElement("button")
+    private actionsElement: HTMLDivElement = document.createElement("div")
 
     constructor() {
         const i = getTranslations(getCurrentLanguage()).modal
@@ -15,8 +16,22 @@ export abstract class FormModal<Output> implements Component, Modal<Output | nul
         this.submitButton.innerText = i.ok
 
         this.cancelButton.innerText = i.cancel
+        this.cancelButton.type = "button"
+        this.cancelButton.classList.add("btn", "btn-ghost")
+        this.submitButton.classList.add("btn", "btn-primary")
+        this.actionsElement.classList.add("modal-actions")
+        this.actionsElement.append(this.cancelButton, this.submitButton)
+        this.formElement.classList.add("modal-form")
 
         this.formElement.addEventListener("submit", (event) => event.preventDefault())
+    }
+
+    protected setSubmitLabel(label: string) {
+        this.submitButton.innerText = label
+    }
+
+    protected setCancelLabel(label: string) {
+        this.cancelButton.innerText = label
     }
 
     abstract reset(): void
@@ -26,9 +41,11 @@ export abstract class FormModal<Output> implements Component, Modal<Output | nul
 
     mount(parent: Element): void {
         if (!this.mounted) {
+            // Build the fields once per instance. `mounted` previously never became true,
+            // so every reuse of the same FormModal appended a second copy of every field.
             this.mountForm(this.formElement)
-            this.formElement.appendChild(this.submitButton)
-            this.formElement.appendChild(this.cancelButton)
+            this.formElement.appendChild(this.actionsElement)
+            this.mounted = true
         }
 
         this.reset()
@@ -36,14 +53,32 @@ export abstract class FormModal<Output> implements Component, Modal<Output | nul
         parent.appendChild(this.formElement)
     }
     unmount(parent: Element): void {
-        parent.removeChild(this.formElement)
+        // The element can already be detached when the modal was replaced while a
+        // successor had mounted; removing it again would throw and abort the cleanup.
+        if (this.formElement.parentElement == parent) {
+            parent.removeChild(this.formElement)
+        }
     }
 
     onFinish(signal: AbortSignal): Promise<Output | null> {
         const abortController = new AbortController()
-        signal.addEventListener("abort", abortController.abort.bind(abortController))
+        const abort = () => {
+            abortController.abort()
+            resolveOnce(null)
+        }
 
-        return new Promise((resolve, reject) => {
+        let settled = false
+        let resolveOnce: (output: Output | null) => void = () => { }
+
+        const promise = new Promise<Output | null>((resolve) => {
+            resolveOnce = (output) => {
+                if (settled) {
+                    return
+                }
+                settled = true
+                resolve(output)
+            }
+
             this.formElement.addEventListener("submit", event => {
                 const output = this.submit()
 
@@ -52,15 +87,34 @@ export abstract class FormModal<Output> implements Component, Modal<Output | nul
                 }
 
                 abortController.abort()
-                resolve(output)
+                resolveOnce(output)
             }, { signal: abortController.signal })
 
             this.cancelButton.addEventListener("click", event => {
                 event.preventDefault()
 
                 abortController.abort()
-                resolve(null)
+                resolveOnce(null)
+            }, { signal: abortController.signal })
+
+            document.addEventListener("keydown", event => {
+                if (event.key == "Escape") {
+                    abortController.abort()
+                    resolveOnce(null)
+                }
             }, { signal: abortController.signal })
         })
+
+        if (signal.aborted) {
+            // Replaced/closed before this modal even started listening.
+            abortController.abort()
+            resolveOnce(null)
+        } else {
+            // The modal was replaced (showModal aborts the previous controller). Without
+            // this the `await showModal(...)` of the previous call never settled.
+            signal.addEventListener("abort", abort, { once: true })
+        }
+
+        return promise
     }
 }

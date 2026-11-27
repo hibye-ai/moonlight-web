@@ -34,6 +34,7 @@ export class OpusAudioDecoderPipe implements DataAudioPlayer {
 
     private buffer: Float32Array = new Float32Array([])
     private channelBuffers: Array<Float32Array> = []
+    private channelBufferCapacity: number = 0
 
     constructor(base: PcmAudioPlayer, logger?: Logger) {
         loadOpus().then(module => this.opusModule = module)
@@ -101,8 +102,13 @@ export class OpusAudioDecoderPipe implements DataAudioPlayer {
         // Initialize channel arrays
         const channels = this.setupData.channels
 
-        if (this.channelBuffers.length != channels) {
+        // Capacity must be measured in *elements* (sample count), not byteLength:
+        // byteLength is 4x the element count, so comparing it against a sample count
+        // silently skipped the grow path and forced the short path to reuse a buffer
+        // of the wrong size.
+        if (this.channelBuffers.length != channels || this.channelBufferCapacity < samplesDecoded) {
             this.channelBuffers = new Array(channels)
+            this.channelBufferCapacity = samplesDecoded
 
             for (let channelIndex = 0; channelIndex < channels; channelIndex++) {
                 this.channelBuffers[channelIndex] = new Float32Array(samplesDecoded)
@@ -110,20 +116,23 @@ export class OpusAudioDecoderPipe implements DataAudioPlayer {
         }
 
         for (let channelIndex = 0; channelIndex < channels; channelIndex++) {
-            if (this.channelBuffers[channelIndex].byteLength < samplesDecoded) {
-                this.channelBuffers[channelIndex] = new Float32Array(samplesDecoded)
-            }
+            const channelBuffer = this.channelBuffers[channelIndex]
 
             for (let sample = 0; sample < samplesDecoded; sample++) {
-                this.channelBuffers[channelIndex][sample] = this.buffer[(sample * channels) + channelIndex]
+                channelBuffer[sample] = this.buffer[(sample * channels) + channelIndex]
             }
         }
 
         // -- Pass data to next decoder
+
+        // Only the decoded samples are valid. Handing over the whole reused array would
+        // replay stale samples from the previous (possibly longer) frame. The unit is
+        // documented as borrowed, so downstream pipes must not retain it past the call;
+        // AudioWorkletPcmPipe copies before posting.
         this.base.playPcm({
             durationMicroseconds: unit.durationMicroseconds,
             timestampMicroseconds: unit.timestampMicroseconds,
-            channelData: this.channelBuffers
+            channelData: this.channelBuffers.map(channelBuffer => channelBuffer.subarray(0, samplesDecoded))
         })
     }
 

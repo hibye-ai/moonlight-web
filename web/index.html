@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html lang="en" class="notranslate">
+<html lang="ko-KR" class="notranslate">
 
 <head>
     <meta charset="UTF-8" />
+    <meta name="theme-color" content="#0b0b0c" />
     <meta name="google" content="notranslate" />
     <title>Moonlight</title>
     <link rel="icon" href="resources/moonlight.svg" sizes="any" type="image/svg+xml">
 
-    <link rel="stylesheet" href="styles/standard.css" id="style">
-    <script type="module" src="styles/index.js"></script>
+    <link rel="stylesheet" href="styles/app.css">
 
     <script type="module" src="index.js" defer></script>
 
@@ -28,9 +28,15 @@
         try {
             const raw = localStorage.getItem("mlSettings");
             const parsed = raw ? JSON.parse(raw) : null;
-            const language = parsed && (parsed.language === "zh-CN" || parsed.language === "zh" || parsed.language === "zh_CN")
-                ? "zh-CN"
-                : "en";
+            const aliases = { zh: "zh-CN", zh_CN: "zh-CN", pt: "pt-BR", pt_BR: "pt-BR", ko: "ko-KR", ko_KR: "ko-KR" };
+            const requested = parsed && parsed.language ? parsed.language : "ko-KR";
+            const language = aliases[requested] || (["en", "zh-CN", "pt-BR", "fr-FR", "ko-KR"].includes(requested) ? requested : "ko-KR");
+            const themeMode = parsed && ["system", "dark", "light"].includes(parsed.theme) ? parsed.theme : "dark";
+            const theme = themeMode === "system"
+                ? (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
+                : themeMode;
+            document.documentElement.dataset.themeMode = themeMode;
+            document.documentElement.dataset.theme = theme;
             document.documentElement.lang = language;
             document.documentElement.translate = false;
             document.documentElement.classList.add("notranslate");

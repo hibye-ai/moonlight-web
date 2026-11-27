@@ -1,7 +1,10 @@
 use std::{
     future::ready,
     pin::Pin,
-    sync::{Arc, Weak},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -47,6 +50,7 @@ use webrtc::{
     peer_connection::{
         RTCPeerConnection,
         configuration::RTCConfiguration,
+        offer_answer_options::RTCOfferOptions,
         peer_connection_state::RTCPeerConnectionState,
         sdp::{sdp_type::RTCSdpType, session_description::RTCSessionDescription},
     },
@@ -69,6 +73,7 @@ use crate::{
 };
 
 mod audio;
+mod pacing;
 mod sender;
 mod video;
 
@@ -80,7 +85,8 @@ struct WebRtcInner {
     input_channels: Mutex<Vec<Arc<RTCDataChannel>>>,
     video: Mutex<WebRtcVideo>,
     audio: Mutex<WebRtcAudio>,
-    // Timeout / Terminate
+    // Recovery / Timeout / Terminate
+    ice_restart_in_progress: AtomicBool,
     pub timeout_terminate_request: Mutex<Option<Instant>>,
 }
 
@@ -172,6 +178,7 @@ pub async fn new(
             Arc::downgrade(&peer),
             audio_sample_queue_size,
         )),
+        ice_restart_in_progress: AtomicBool::new(false),
         timeout_terminate_request: Mutex::new(None),
     });
 
@@ -324,7 +331,21 @@ fn create_channel_message_handler(
 
 impl WebRtcInner {
     // -- Handle Connection State
-    async fn on_ice_connection_state_change(self: &Arc<Self>, _state: RTCIceConnectionState) {}
+    async fn on_ice_connection_state_change(self: &Arc<Self>, state: RTCIceConnectionState) {
+        debug!("[WebRTC]: ICE connection state changed to {state}");
+        match state {
+            RTCIceConnectionState::Disconnected | RTCIceConnectionState::Failed => {
+                self.request_ice_restart().await;
+                self.request_terminate().await;
+            }
+            RTCIceConnectionState::Connected | RTCIceConnectionState::Completed => {
+                self.ice_restart_in_progress.store(false, Ordering::Release);
+                self.clear_terminate_request().await;
+            }
+            _ => {}
+        }
+    }
+
     async fn on_peer_connection_state_change(self: Arc<Self>, state: RTCPeerConnectionState) {
         #[allow(clippy::collapsible_if)]
         if matches!(state, RTCPeerConnectionState::Closed) {
@@ -336,15 +357,44 @@ impl WebRtcInner {
             state,
             RTCPeerConnectionState::Failed | RTCPeerConnectionState::Disconnected
         ) {
+            self.request_ice_restart().await;
             self.request_terminate().await;
         } else {
+            if matches!(state, RTCPeerConnectionState::Connected) {
+                self.ice_restart_in_progress.store(false, Ordering::Release);
+            }
             self.clear_terminate_request().await;
+        }
+    }
+
+    async fn request_ice_restart(&self) {
+        if self
+            .ice_restart_in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        warn!("[WebRTC]: connection degraded; requesting ICE restart");
+        if !self
+            .send_offer_with_options(Some(RTCOfferOptions {
+                ice_restart: true,
+                ..Default::default()
+            }))
+            .await
+        {
+            self.ice_restart_in_progress.store(false, Ordering::Release);
         }
     }
 
     // -- Handle Signaling
     async fn send_offer(&self) -> bool {
-        let local_description = match self.peer.create_offer(None).await {
+        self.send_offer_with_options(None).await
+    }
+
+    async fn send_offer_with_options(&self, options: Option<RTCOfferOptions>) -> bool {
+        let local_description = match self.peer.create_offer(options).await {
             Err(err) => {
                 error!("[Signaling]: failed to create offer: {err:?}");
                 return false;
@@ -678,6 +728,17 @@ impl TransportSender for WebRTCTransportSender {
     }
 
     async fn close(&self) -> Result<(), TransportError> {
+        // Stop our own sender/RTCP tasks before tearing the peer down, so a
+        // closing stream does not leave detached tasks writing into a dead peer.
+        {
+            let mut video = self.inner.video.lock().await;
+            video.shutdown().await;
+        }
+        {
+            let mut audio = self.inner.audio.lock().await;
+            audio.shutdown().await;
+        }
+
         self.inner
             .peer
             .close()

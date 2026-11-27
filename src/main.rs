@@ -254,15 +254,13 @@ async fn start(config: Config) -> Result<(), anyhow::Error> {
                 .service(
                     scope(&url_path_prefix)
                         .app_data(app.clone())
+                        // Static assets may be stored locally but must be revalidated, so
+                        // deployments stay fresh without downloading unchanged files again.
                         .wrap(
                             middleware::DefaultHeaders::new()
-                                .add((
-                                    "Cache-Control",
-                                    "no-store, no-cache, must-revalidate, private",
-                                ))
-                                .add(("Pragma", "no-cache"))
-                                .add(("Expires", "0")),
+                                .add(("Cache-Control", "private, no-cache")),
                         )
+                        .wrap(middleware::Compress::default())
                         .service(api_service())
                         .service(web_config_js_service())
                         .service(web_service()),

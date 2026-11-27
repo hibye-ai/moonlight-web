@@ -1,34 +1,3 @@
-import { globalDefaultSettings, getLocalStreamSettings } from "../component/settings_menu.js"
-
-// old doesn't exist anymore and is always replaced with moonlight when loading the settings
+// The interface ships a single stylesheet (styles/app.css).
+// The page style setting is kept only so older saved settings still parse.
 export type PageStyle = "standard" | "old" | "moonlight"
-
-let currentStyle: PageStyle | null = null
-const styleLink = document.getElementById("style") as HTMLLinkElement
-
-function toAbsolute(path: string) {
-    return new URL(path, document.baseURI).href
-}
-
-export function setStyle(style: PageStyle) {
-    if (!currentStyle) {
-        document.head.appendChild(styleLink)
-    }
-
-    const path = `styles/${style}.css`
-    const absolute = toAbsolute(path)
-
-    if (styleLink.href !== absolute) {
-        styleLink.href = absolute
-    }
-
-    currentStyle = style
-}
-
-export function getStyle(): PageStyle {
-    return currentStyle as PageStyle
-}
-
-const settings = getLocalStreamSettings(globalDefaultSettings())
-
-setStyle(settings.pageStyle)

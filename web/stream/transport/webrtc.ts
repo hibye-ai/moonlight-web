@@ -3,6 +3,8 @@ import { Logger } from "../log.js";
 import { StatValue } from "../stats.js";
 import { CAPABILITIES_CODECS, emptyVideoCodecs, maybeVideoCodecs, VideoCodecSupport } from "../video.js";
 import { DataTransportChannel, Transport, TransportAudioSetup, TransportChannel, TransportChannelIdKey, TransportChannelIdValue, TransportVideoSetup, AudioTrackTransportChannel, VideoTrackTransportChannel, TrackTransportChannel, TransportShutdown } from "./index.js";
+import { RtcStatsCollector, statReportIdentity } from "./rtc_stats.js";
+import { AudioJitterPolicy, DEFAULT_AUDIO_JITTER_POLICY, ResolvedReceiverPolicy, resolveAudioReceiverPolicy, applyReceiverPolicy, applyReceiverPolicyLive } from "./audio_policy.js";
 
 export class WebRTCTransport implements Transport {
     implementationName: string = "webrtc"
@@ -246,7 +248,7 @@ export class WebRTCTransport implements Transport {
 
             // All Data Channels are created by the server
             const id = TransportChannelId[channel]
-            this.channels[id] = new WebRTCDataTransportChannel(channel, null)
+            this.channels[id] = new WebRTCDataTransportChannel(channel, null, undefined, () => this.failInputChannel())
         }
     }
 
@@ -254,6 +256,32 @@ export class WebRTCTransport implements Transport {
     private videoReceiver: RTCRtpReceiver | null = null
 
     private audioTrackHolder: TrackHolder = { ontrack: null, track: null }
+    private audioReceiver: RTCRtpReceiver | null = null
+
+    // New/missing settings let the browser absorb jitter; explicit policies remain.
+    audioJitterPolicy: AudioJitterPolicy = DEFAULT_AUDIO_JITTER_POLICY
+    private resolvedAudioPolicy: ResolvedReceiverPolicy | null = null
+
+    /// Name of the audio receiver policy actually applied, for the stats display.
+    getAudioJitterPolicyName(): string {
+        return (this.resolvedAudioPolicy ?? resolveAudioReceiverPolicy(this.audioJitterPolicy)).name
+    }
+
+    /// Session preset switch on the live audio receiver. Only the audio receiver is touched;
+    /// the transport, video and the stream keep running. Returns whether it applied live.
+    setAudioJitterPolicyLive(policy: AudioJitterPolicy): boolean {
+        this.audioJitterPolicy = policy
+        if (!this.audioReceiver) {
+            return false
+        }
+        const resolved = resolveAudioReceiverPolicy(policy)
+        const applied = applyReceiverPolicyLive(this.audioReceiver, resolved)
+        if (applied) {
+            this.resolvedAudioPolicy = resolved
+            this.logger?.debug(`Audio receiver jitter policy changed live: ${resolved.name}`)
+        }
+        return applied
+    }
 
     private onTrack(event: RTCTrackEvent) {
         const track = event.track
@@ -261,11 +289,20 @@ export class WebRTCTransport implements Transport {
         const receiver = event.receiver
         if (track.kind == "video") {
             this.videoReceiver = receiver
-        }
 
-        receiver.jitterBufferTarget = 0
-        if ("playoutDelayHint" in receiver) {
-            receiver.playoutDelayHint = 0
+            // Video stays on the low-latency settings; the audit recommends holding this
+            // fixed while the audio policy is compared.
+            receiver.jitterBufferTarget = 0
+            if ("playoutDelayHint" in receiver) {
+                receiver.playoutDelayHint = 0
+            }
+        } else if (track.kind == "audio") {
+            this.audioReceiver = receiver
+
+            // Audio may use a different policy (opt-in). The default is still 0/0.
+            this.resolvedAudioPolicy = resolveAudioReceiverPolicy(this.audioJitterPolicy)
+            applyReceiverPolicy(receiver, this.resolvedAudioPolicy)
+            this.logger?.debug(`Audio receiver jitter policy: ${this.resolvedAudioPolicy.name}`)
         }
 
         this.logger?.debug(`Adding receiver: ${track.kind}, ${track.id}, ${track.label}`)
@@ -309,7 +346,7 @@ export class WebRTCTransport implements Transport {
                 (existingChannel as WebRTCDataTransportChannel).replaceChannel(remoteChannel)
             } else {
                 this.logger?.debug(`Creating new channel for ${label}`)
-                this.channels[id] = new WebRTCDataTransportChannel(label, remoteChannel)
+                this.channels[id] = new WebRTCDataTransportChannel(label, remoteChannel, undefined, () => this.failInputChannel())
             }
         } else {
             this.logger?.debug(`Unknown remote data channel: ${label}`)
@@ -372,76 +409,144 @@ export class WebRTCTransport implements Transport {
     onconnect: (() => void) | null = null
 
     onclose: ((shutdown: TransportShutdown) => void) | null = null
+    private failInputChannel() {
+        this.logger?.debug("Input channel stalled; closing the session to release input state")
+        void this.close()
+        this.onclose?.("failed")
+    }
     async close(): Promise<void> {
         this.logger?.debug("Closing WebRTC Peer")
-
+        for (const channel of this.channels) {
+            if (channel instanceof WebRTCDataTransportChannel) channel.dispose()
+        }
         this.peer?.close()
     }
 
+    // Per-stream inbound-rtp history: audio/video/SSRC are reported separately and
+    // cumulative counters are turned into interval means (see rtc_stats.ts).
+    private inbound = new RtcStatsCollector()
+
     async getStats(): Promise<Record<string, StatValue>> {
         const statsData: Record<string, StatValue> = {}
-
-        if (!this.videoReceiver) {
-            return {}
+        if (this.peer) {
+            if (typeof this.peer.iceConnectionState === "string") statsData.webrtcIceState = this.peer.iceConnectionState
+            if (typeof this.peer.connectionState === "string") statsData.webrtcConnectionState = this.peer.connectionState
         }
-        const stats = await this.videoReceiver.getStats()
 
-        console.debug("----------------- raw video stats -----------------")
-        for (const [key, value] of stats.entries()) {
-            console.debug("raw video stats", key, value)
+        // Always label the audio receiver policy so an A/B capture is self-describing even
+        // when the connection never produced an inbound-rtp report.
+        statsData.webrtcAudioJitterPolicy = this.getAudioJitterPolicyName()
+        const dataChannels = this.channels.filter((c): c is WebRTCDataTransportChannel => c instanceof WebRTCDataTransportChannel)
+        statsData.webrtcInputQueuedMessages = dataChannels.reduce((n, c) => n + c.queuedMessages, 0)
+        statsData.webrtcInputBufferedBytes = dataChannels.reduce((n, c) => n + (c.estimatedBufferedBytes() ?? 0), 0)
+        statsData.webrtcInputCoalesced = dataChannels.reduce((n, c) => n + c.coalesced, 0)
+        statsData.webrtcInputFailures = dataChannels.reduce((n, c) => n + c.failures, 0)
 
-            if ("decoderImplementation" in value && value.decoderImplementation != null) {
-                statsData.decoderImplementation = value.decoderImplementation
-            }
-            if ("frameWidth" in value && value.frameWidth != null) {
-                statsData.videoWidth = value.frameWidth
-            }
-            if ("frameHeight" in value && value.frameHeight != null) {
-                statsData.videoHeight = value.frameHeight
-            }
-            if ("framesPerSecond" in value && value.framesPerSecond != null) {
-                statsData.webrtcFps = value.framesPerSecond
+        // AR-12: audio-only sessions have no video receiver. Bailing out here would hide
+        // every audio SSRC from the stats display, so either receiver is enough to sample.
+        if (!this.videoReceiver && !this.audioReceiver) {
+            return statsData
+        }
+
+        // AR-12: `RTCPeerConnection.getStats()` and `RTCRtpReceiver.getStats()` are NOT
+        // interchangeable. The peer connection may return an empty or partial map (early in
+        // the session, before the receiver has been attached), and some browsers put the
+        // inbound-rtp counters only on the receiver. So all available sources are queried
+        // and merged instead of letting a present-but-empty peer map suppress the receivers
+        // (`peerReports ?? fallback` did exactly that). Order matters: the peer connection is
+        // the authoritative source, so its copy of a report wins over a receiver's copy.
+        const merged = await this.collectStatReports([
+            { name: "peer", source: this.peer },
+            { name: "audioReceiver", source: this.audioReceiver },
+            { name: "videoReceiver", source: this.videoReceiver },
+        ])
+
+        // A single collector pass over the merged snapshot: per-kind aggregation and the
+        // per-stream history must see one coherent view, not one pass per source.
+        if (merged.queriedAny) {
+            Object.assign(statsData, this.inbound.collect(merged.entries))
+        }
+
+        const selectedPairId = merged.entries.find(([, value]) => value.type === "transport" && value.selectedCandidatePairId)?.[1].selectedCandidatePairId
+        const selectedPair = merged.entries.find(([, value]) => value.type === "candidate-pair" && (selectedPairId ? value.id === selectedPairId : value.state === "succeeded" && (value.nominated || value.selected)))?.[1]
+        for (const [_key, value] of merged.entries) {
+            // inbound-rtp is handled per stream above; a second pass would re-introduce the
+            // audio/video overwrite this collector exists to prevent.
+            if ((value as any).type == "inbound-rtp") {
+                continue
             }
 
-            if ("jitterBufferDelay" in value && value.jitterBufferDelay != null) {
-                statsData.webrtcJitterBufferDelayMs = value.jitterBufferDelay
-            }
-            if ("jitterBufferTargetDelay" in value && value.jitterBufferTargetDelay != null) {
-                statsData.webrtcJitterBufferTargetDelayMs = value.jitterBufferTargetDelay
-            }
-            if ("jitterBufferMinimumDelay" in value && value.jitterBufferMinimumDelay != null) {
-                statsData.webrtcJitterBufferMinimumDelayMs = value.jitterBufferMinimumDelay
-            }
-            if ("jitter" in value && value.jitter != null) {
-                statsData.webrtcJitterMs = value.jitter
-            }
-            if ("totalDecodeTime" in value && value.totalDecodeTime != null) {
-                statsData.webrtcTotalDecodeTimeMs = value.totalDecodeTime
-            }
-            if ("totalAssemblyTime" in value && value.totalAssemblyTime != null) {
-                statsData.webrtcTotalAssemblyTimeMs = value.totalAssemblyTime
-            }
-            if ("totalProcessingDelay" in value && value.totalProcessingDelay != null) {
-                statsData.webrtcTotalProcessingDelayMs = value.totalProcessingDelay
-            }
-            if ("packetsReceived" in value && value.packetsReceived != null) {
-                statsData.webrtcPacketsReceived = value.packetsReceived
-            }
-            if ("packetsLost" in value && value.packetsLost != null) {
-                statsData.webrtcPacketsLost = value.packetsLost
-            }
-            if ("framesDropped" in value && value.framesDropped != null) {
-                statsData.webrtcFramesDropped = value.framesDropped
-            }
-            if ("keyFramesDecoded" in value && value.keyFramesDecoded != null) {
-                statsData.webrtcKeyFramesDecoded = value.keyFramesDecoded
-            }
-            if ("nackCount" in value && value.nackCount != null) {
-                statsData.webrtcNackCount = value.nackCount
+            if (value === selectedPair) {
+                for (const [id, prefix] of [[value.localCandidateId, "webrtcLocal"], [value.remoteCandidateId, "webrtcRemote"]]) {
+                    const candidate = merged.entries.find(([, item]) => item.id === id)?.[1]
+                    if (!candidate) continue
+                    if (["host", "srflx", "prflx", "relay"].indexOf(candidate.candidateType) !== -1) statsData[`${prefix}CandidateType`] = candidate.candidateType
+                    if (["udp", "tcp"].indexOf(candidate.protocol) !== -1) statsData[`${prefix}Protocol`] = candidate.protocol
+                    if (["udp", "tcp", "tls"].indexOf(candidate.relayProtocol) !== -1) statsData[`${prefix}RelayProtocol`] = candidate.relayProtocol
+                }
+                if (value.currentRoundTripTime != null) {
+                    statsData.webrtcRttMs = value.currentRoundTripTime * 1000
+                }
+                if (value.availableIncomingBitrate != null) {
+                    statsData.webrtcAvailableIncomingKbps = value.availableIncomingBitrate / 1000
+                }
             }
         }
 
         return statsData
+    }
+
+    /// Merge the report maps of `peer`, `audioReceiver` and `videoReceiver` into one snapshot.
+    ///
+    /// * A source that is absent, or that has no `getStats()` (a partially initialised
+    ///   transport), is skipped — not treated as an empty report.
+    /// * A source whose `getStats()` throws is logged and skipped; the remaining sources are
+    ///   still used. The error is never silently discarded, and one broken source cannot hide
+    ///   the others. If EVERY source fails the caller keeps the previous history instead of
+    ///   recording a fake "no streams" sample.
+    /// * Reports are de-duplicated by report identity (`type|id`, else `type|kind|ssrc`) so a
+    ///   report present in both the peer connection and a receiver is counted once, with the
+    ///   authoritative peer value kept.
+    private async collectStatReports(sources: Array<{ name: string, source: { getStats(): Promise<RTCStatsReport> } | null }>): Promise<{ entries: Array<[string, any]>, queriedAny: boolean }> {
+        const entries: Array<[string, any]> = []
+        const seen = new Set<string>()
+        let queriedAny = false
+
+        for (const [index, { name, source }] of sources.entries()) {
+            if (source == null || typeof source.getStats != "function") {
+                continue
+            }
+
+            let reports: RTCStatsReport | null = null
+            try {
+                reports = await source.getStats()
+            } catch (error) {
+                this.logger?.debug(`Failed to read ${name} stats: ${String(error)}`)
+                continue
+            }
+            if (reports == null || typeof reports.entries != "function") {
+                this.logger?.debug(`Ignoring ${name} stats: getStats() returned no report map`)
+                continue
+            }
+
+            queriedAny = true
+            for (const [key, report] of reports.entries()) {
+                const identity = statReportIdentity(key, report, index)
+                if (seen.has(identity)) {
+                    // Peer wins: it was merged first, so the authoritative copy is kept.
+                    continue
+                }
+                seen.add(identity)
+                entries.push([identity, report])
+            }
+        }
+
+        return { entries, queriedAny }
+    }
+
+    /// Forget inbound-rtp history so the next sample starts a new interval (new peer).
+    resetStatsHistory() {
+        this.inbound.reset()
     }
 }
 
@@ -503,7 +608,7 @@ class WebRTCInboundTrackTransportChannel<T extends string> implements TrackTrans
     }
 }
 
-class WebRTCDataTransportChannel implements DataTransportChannel {
+export class WebRTCDataTransportChannel implements DataTransportChannel {
     type: "data" = "data"
 
     canReceive: boolean = true
@@ -516,15 +621,25 @@ class WebRTCDataTransportChannel implements DataTransportChannel {
     private boundTryDequeueSendQueue: () => void
     private boundOnMessage: (event: MessageEvent) => void
 
-    constructor(label: string, channel: RTCDataChannel | null, logger?: Logger) {
+    private disposed = false
+    private queueBytes = 0
+    private queueSince = 0
+    private queueTimer: ReturnType<typeof setTimeout> | null = null
+    private onFailure: (() => void) | undefined
+    coalesced = 0
+    failures = 0
+    get queuedMessages() { return this.sendQueue.length }
+
+    constructor(label: string, channel: RTCDataChannel | null, logger?: Logger, onFailure?: () => void) {
         this.label = label
         this.channel = channel
         this.boundOnMessage = this.onMessage.bind(this)
         this.boundTryDequeueSendQueue = this.tryDequeueSendQueue.bind(this)
 
         this.logger = logger ?? null
-
-        this.channel?.addEventListener("message", this.boundOnMessage)
+        this.onFailure = onFailure
+        this.channel = null
+        if (channel) this.replaceChannel(channel)
     }
 
     // Replace the underlying channel with a new one (e.g., from remote peer)
@@ -534,32 +649,82 @@ class WebRTCDataTransportChannel implements DataTransportChannel {
         // Remove listener from old channel
         this.channel?.removeEventListener("open", this.boundTryDequeueSendQueue)
         this.channel?.removeEventListener("message", this.boundOnMessage)
+        this.channel?.removeEventListener("bufferedamountlow", this.boundTryDequeueSendQueue)
+        if (this.disposed) { newChannel.close(); return }
         // Add listener to new channel
         this.channel = newChannel
         this.channel.addEventListener("open", this.boundTryDequeueSendQueue)
         this.channel.addEventListener("message", this.boundOnMessage)
+        this.channel.bufferedAmountLowThreshold = 64 * 1024
+        this.channel.addEventListener("bufferedamountlow", this.boundTryDequeueSendQueue)
+        this.tryDequeueSendQueue()
     }
 
     private sendQueue: Array<ArrayBuffer> = []
     send(message: ArrayBuffer): void {
-        console.debug(this.label, message)
-
-        if (!this.channel || this.channel.readyState != "open") {
-            console.debug(`Tried sending packet to ${this.label} with readyState ${this.channel?.readyState}. Buffering it for the future.`)
-            // Make sure to copy the message
-            this.sendQueue.push(message.slice(0))
-        } else {
-            this.channel.send(message)
+        if (this.disposed) return
+        if (this.channel?.readyState === "closed" || this.channel?.readyState === "closing") { this.fail(); return }
+        if (this.channel?.readyState === "open" && !this.sendQueue.length && this.channel.bufferedAmount < 128 * 1024) {
+            try { this.channel.send(message); return } catch { this.fail(); return }
         }
+        // Only absolute coordinates supersede earlier messages. Relative movement,
+        // key/button releases and all other reliable messages retain their order.
+        if (this.label.toUpperCase() === "MOUSE_ABSOLUTE" && this.sendQueue.length) {
+            this.coalesced += this.sendQueue.length
+            this.sendQueue = []
+            this.queueBytes = 0
+        }
+        if (this.sendQueue.length >= 256 || this.queueBytes + message.byteLength > 512 * 1024) { this.fail(); return }
+        if (!this.sendQueue.length) this.queueSince = performance.now()
+        this.sendQueue.push(message.slice(0))
+        this.queueBytes += message.byteLength
+        this.armQueueTimer()
+    }
+    private armQueueTimer() {
+        if (this.queueTimer != null || this.disposed || !this.sendQueue.length) return
+        this.queueTimer = setTimeout(() => {
+            this.queueTimer = null
+            const limit = this.channel?.readyState === "open" ? 500 : 10000
+            if (performance.now() - this.queueSince >= limit) {
+                if (this.label.toUpperCase() === "MOUSE_ABSOLUTE") this.clearQueue()
+                else this.fail()
+            } else this.tryDequeueSendQueue()
+        }, 100)
+    }
+    private clearQueue() {
+        this.sendQueue = []
+        this.queueBytes = 0
+        if (this.queueTimer != null) clearTimeout(this.queueTimer)
+        this.queueTimer = null
+    }
+    private fail() {
+        if (this.disposed) return
+        this.failures++
+        this.dispose()
+        this.onFailure?.()
+    }
+    dispose() {
+        this.disposed = true
+        this.clearQueue()
+        this.channel?.removeEventListener("open", this.boundTryDequeueSendQueue)
+        this.channel?.removeEventListener("message", this.boundOnMessage)
+        this.channel?.removeEventListener("bufferedamountlow", this.boundTryDequeueSendQueue)
+        this.receiveListeners = []
     }
     private tryDequeueSendQueue() {
+        if (this.disposed) return
         if (!this.channel || this.channel.readyState != "open") {
+            this.armQueueTimer()
             return
         }
-
-        for (const message of this.sendQueue.splice(0)) {
-            this.channel.send(message)
+        while (this.sendQueue.length && this.channel.bufferedAmount < 128 * 1024) {
+            const message = this.sendQueue[0]
+            try { this.channel.send(message) } catch { this.fail(); return }
+            this.sendQueue.shift()
+            this.queueBytes -= message.byteLength
         }
+        if (!this.sendQueue.length) this.clearQueue()
+        else this.armQueueTimer()
     }
 
     private onMessage(event: MessageEvent) {
@@ -584,6 +749,6 @@ class WebRTCDataTransportChannel implements DataTransportChannel {
         }
     }
     estimatedBufferedBytes(): number | null {
-        return this.channel?.bufferedAmount ?? null
+        return this.queueBytes + (this.channel?.bufferedAmount ?? 0)
     }
 }

@@ -49,6 +49,7 @@ export const WorkerVideoMediaStreamProcessorPipe = workerPipe("WorkerVideoMediaS
 export const WorkerVideoMediaStreamProcessorCanvasPipe = workerPipe("WorkerVideoMediaStreamProcessorCanvasPipe", { pipes: ["WorkerVideoTrackReceivePipe", "VideoMediaStreamTrackProcessorPipe", "CanvasFrameDrawPipe", "WorkerOffscreenCanvasSendPipe"] })
 export const WorkerDataToVideoTrackPipe = workerPipe("WorkerVideoFrameToTrackPipe", { pipes: ["WorkerVideoDataReceivePipe", "VideoDecoderPipe", "VideoTrackGeneratorPipe", "WorkerVideoTrackSendPipe"] })
 export const WorkerDataToCanvasGlRenderOpenH264Pipe = workerPipe("WorkerDataToCanvasGlRenderOpenH264Pipe", { pipes: ["WorkerVideoDataReceivePipe", "OpenH264DecoderPipe", "CanvasYuv420FrameDrawPipe", "WorkerOffscreenCanvasSendPipe"] })
+export const WorkerDataToCanvasWebCodecsPipe = workerPipe("WorkerDataToCanvasWebCodecsPipe", { pipes: ["WorkerVideoDataReceivePipe", "VideoDecoderPipe", "CanvasFrameDrawPipe", "WorkerOffscreenCanvasSendPipe"] })
 
 const PIPELINES: Array<Pipeline> = [
     // -- track
@@ -64,6 +65,8 @@ const PIPELINES: Array<Pipeline> = [
     // - VideoDecoder
     // Convert data -> video frame (in worker) -> track (in worker, VideoTrackGenerator) -> video element, Safari
     { input: "data", pipes: [DepacketizeVideoPipe, WorkerVideoDataSendPipe, WorkerDataToVideoTrackPipe, WorkerVideoTrackReceivePipe], renderer: VideoElementRenderer },
+    // Decode and draw away from input/UI work; capability probes retain existing fallbacks.
+    { input: "data", pipes: [DepacketizeVideoPipe, WorkerVideoDataSendPipe, WorkerDataToCanvasWebCodecsPipe], renderer: OffscreenCanvasRenderer },
     // Convert data -> video frame -> track (MediaStreamTrackGenerator) -> video element, Chromium
     { input: "data", pipes: [DepacketizeVideoPipe, VideoDecoderPipe, VideoMediaStreamTrackGeneratorPipe], renderer: VideoElementRenderer },
     // Convert data -> video frame -> canvas, Default (Secure Context), Firefox

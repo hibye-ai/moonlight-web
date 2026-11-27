@@ -1,0 +1,53 @@
+FROM node:24-bookworm AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    clang \
+    cmake \
+    curl \
+    git \
+    libssl-dev \
+    pkg-config \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain nightly-2026-02-13
+ENV PATH=/root/.cargo/bin:$PATH
+
+WORKDIR /build
+COPY . ./
+
+RUN npm ci
+RUN npm run build && mv dist static
+RUN cargo build --release --locked
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    busybox-static \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV MOONLIGHT_WEB_PATH=/moonlight-web
+ENV WEBRTC_PORT_RANGE=40000:40100
+ARG GID=999
+ARG UID=999
+
+LABEL org.opencontainers.image.source="https://github.com/hibye-ai/moonlight-web" \
+      org.opencontainers.image.licenses="GPL-3.0-or-later"
+
+WORKDIR ${MOONLIGHT_WEB_PATH}
+RUN mkdir -p ${MOONLIGHT_WEB_PATH}/server && chown ${UID}:${GID} ${MOONLIGHT_WEB_PATH}/server
+
+COPY --from=builder --chown=${UID}:${GID} /build/target/release/web-server ${MOONLIGHT_WEB_PATH}/web-server
+COPY --from=builder --chown=${UID}:${GID} /build/target/release/streamer ${MOONLIGHT_WEB_PATH}/streamer
+COPY --from=builder --chown=${UID}:${GID} /build/static ${MOONLIGHT_WEB_PATH}/static
+COPY LICENSE ${MOONLIGHT_WEB_PATH}/LICENSE
+COPY --chown=${UID}:${GID} docker/entrypoint.sh /entrypoint.sh
+
+VOLUME ${MOONLIGHT_WEB_PATH}/server
+EXPOSE 8080 40000-40100/udp
+
+USER ${UID}:${GID}
+ENTRYPOINT ["/entrypoint.sh"]

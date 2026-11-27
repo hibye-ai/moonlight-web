@@ -1,5 +1,6 @@
 import { globalObject } from "../../util.js";
 import { Pipe, PipeInfo } from "../pipeline/index.js";
+import { StatValue } from "../stats.js";
 import { addPipePassthrough } from "../pipeline/pipes.js";
 import { emptyVideoCodecs, maybeVideoCodecs, VideoCodecSupport } from "../video.js";
 import { getStreamRectCorrected, TrackVideoRenderer, UrlVideoRenderer, VideoRenderer, VideoRendererSetup } from "./index.js";
@@ -96,6 +97,16 @@ export class VideoElementRenderer implements TrackVideoRenderer, VideoRenderer {
             this.stream.removeTrack(this.oldTrack)
         }
         this.videoElement.srcObject = null
+        this.oldTrack = null
+    }
+    async reportStats(stats: Record<string, StatValue>): Promise<void> {
+        const quality = this.videoElement.getVideoPlaybackQuality?.()
+        if (quality) {
+            stats.videoRenderedTotal = quality.totalVideoFrames
+            stats.videoRenderedDropped = quality.droppedVideoFrames
+        }
+        stats.videoReadyState = this.videoElement.readyState
+        stats.videoPaused = this.videoElement.paused ? 1 : 0
     }
 
     setTrack(track: MediaStreamTrack): void {

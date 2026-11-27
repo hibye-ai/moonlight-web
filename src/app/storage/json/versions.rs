@@ -189,12 +189,19 @@ fn migrate_v2_to_v3(old: V2) -> V3 {
                             RoleType::Admin => ADMIN_ID,
                             RoleType::User => USER_ID,
                         },
+                        credential_version: 0,
                     },
                 )
             })
             .collect(),
         hosts: old.hosts,
         roles,
+        // A migrated file has never been restored under this scheme, so its
+        // restore epoch is zero and the allocators start above the ids/versions
+        // that the migration just produced.
+        identity_epoch: 0,
+        next_credential_version: 0,
+        next_user_id: 0,
     }
 }
 
@@ -208,6 +215,32 @@ pub struct V3 {
     pub hosts: HashMap<u32, V2Host>,
     #[serde(deserialize_with = "de_int_key")]
     pub roles: HashMap<u32, V3Role>,
+    /// Restore epoch of the identity snapshot (AR-01/AR-02).
+    ///
+    /// Advances by one on every accepted restore and is part of the credential pin
+    /// every authentication carries, so a credential check, a transparent rehash
+    /// and a session issuance are only valid inside the epoch they were performed
+    /// in. It is persisted with the snapshot, so a restart cannot rewind it and a
+    /// restored file can never lower it (the importer takes the maximum).
+    #[serde(default)]
+    pub identity_epoch: u64,
+    /// High-water mark for [`V3User::credential_version`].
+    ///
+    /// AR-01: generations are handed out from this counter and the counter only
+    /// moves forward, including across restores of older backups, repeated
+    /// restores and account removal/replacement. A generation is therefore never
+    /// issued twice in the lifetime of a store, which is what closes the ABA
+    /// window a restore would otherwise open by reinstating an old version.
+    #[serde(default)]
+    pub next_credential_version: u64,
+    /// Monotonic user-id allocator.
+    ///
+    /// A new account starts at credential generation zero (that is observable
+    /// behaviour), so user ids must never be reused: reusing an id would let a
+    /// credential pin taken from a deleted account be replayed against its
+    /// replacement.
+    #[serde(default)]
+    pub next_user_id: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,6 +249,11 @@ pub struct V3User {
     pub name: String,
     pub password: Option<V2UserPassword>,
     pub client_unique_id: String,
+    /// Credential generation (AR-01). Older files and backups predate it, so a
+    /// missing value means "generation zero"; a restore advances it for every
+    /// account, which is what makes pre-restore snapshots recognisably stale.
+    #[serde(default)]
+    pub credential_version: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

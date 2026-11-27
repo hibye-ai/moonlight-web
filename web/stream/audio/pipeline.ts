@@ -6,6 +6,7 @@ import { Logger } from "../log.js"
 import { buildPipeline, gatherPipeInfo, OutputPipeStatic, PipeInfoStatic, PipeStatic } from "../pipeline/index.js"
 import { OpusAudioDecoderPipe } from "./opus_decoder_pipe.js"
 import { AudioBufferPipe as AudioPcmBufferPipe } from "./audio_buffer_pipe.js"
+import { AudioWorkletPcmPipe } from "./audio_worklet_pipe.js"
 import { ContextDestinationNodeAudioPlayer } from "./audio_context_destination.js"
 import { AudioContextTrackPipe } from "./audio_context_track_pipe.js"
 import { DepacketizeAudioPipe } from "./depacketize_pipe.js"
@@ -25,12 +26,19 @@ export type AudioPipelineOptions = {
 
 type Pipeline = { input: string, pipes: Array<PipeStatic>, player: AudioPlayerStatic }
 
-const PIPELINES: Array<Pipeline> = [
+// Ordered by preference: the first candidate whose pipes and player are all supported
+// wins. Every pipe referenced here MUST also be listed in `pipes()` in
+// web/stream/pipeline/index.ts, otherwise `gatherPipeInfo()` has no info for it and the
+// candidate is skipped unconditionally.
+export const PIPELINES: Array<Pipeline> = [
     // Convert track -> audio_element, All Browsers
     { input: "audiotrack", pipes: [], player: AudioElementPlayer },
     // Convert data -> audio_sample -> track (MediaStreamTrackGenerator) -> audio_element, Chromium
     { input: "data", pipes: [DepacketizeAudioPipe, AudioDecoderPipe, AudioMediaStreamTrackGeneratorPipe], player: AudioElementPlayer },
-    // Convert data -> audio_sample -> audio_sample_pcm -> audio_context_element -> audio_element, Safari / Firefox
+    // Prefer AudioWorklet for PCM playback when available. It keeps audio
+    // scheduling off the main UI thread and bounds queued latency.
+    { input: "data", pipes: [DepacketizeAudioPipe, OpusAudioDecoderPipe, AudioWorkletPcmPipe], player: ContextDestinationNodeAudioPlayer },
+    // Convert data -> audio_sample -> audio_sample_pcm -> audio_context_element -> audio_element, Safari / Firefox fallback
     { input: "data", pipes: [DepacketizeAudioPipe, OpusAudioDecoderPipe, AudioPcmBufferPipe, AudioContextTrackPipe], player: AudioElementPlayer },
     // Convert data -> audio_sample -> audio_sample_pcm -> audio_context_element -> audio_element, Safari / Firefox
     { input: "data", pipes: [DepacketizeAudioPipe, OpusAudioDecoderPipe, AudioPcmBufferPipe], player: ContextDestinationNodeAudioPlayer },

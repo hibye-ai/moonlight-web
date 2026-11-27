@@ -12,7 +12,25 @@ export class WebSocketTransport implements Transport {
     private ws: WebSocket
     private buffer: ByteBuffer
 
-    private channels: Array<TransportChannel> = []
+    private channels: Array<WebSocketDataTransportChannel> = []
+    private receivedMessages = 0
+    private receivedBytes = 0
+    private lastMessageAt: number | null = null
+    private maxReceiveGapMs = 0
+    private readonly messageListener = (event: MessageEvent) => {
+        const data = event.data
+        if (!(data instanceof ArrayBuffer) || data.byteLength === 0) return
+        const now = performance.now()
+        if (this.lastMessageAt != null) this.maxReceiveGapMs = Math.max(this.maxReceiveGapMs, now - this.lastMessageAt)
+        this.lastMessageAt = now
+        this.receivedMessages++
+        this.receivedBytes += data.byteLength
+        const channel = this.channels[new Uint8Array(data, 0, 1)[0]]
+        // Dispatch once. Each consumer owns its payload, while the shared send
+        // buffer is never touched by receive callbacks.
+        if (channel) channel.receive(data.slice(1))
+    }
+    private readonly closeListener = (event: CloseEvent) => this.onWsClose(event)
 
     constructor(ws: WebSocket, buffer: ByteBuffer, logger: Logger | null) {
         if (logger) {
@@ -25,7 +43,8 @@ export class WebSocketTransport implements Transport {
         // Very important, set the binary type to arraybuffer
         this.ws.binaryType = "arraybuffer"
 
-        this.ws.addEventListener("close", this.onWsClose.bind(this))
+        this.ws.addEventListener("close", this.closeListener)
+        this.ws.addEventListener("message", this.messageListener)
 
         for (const keyRaw in TransportChannelId) {
             const key = keyRaw as TransportChannelIdKey
@@ -62,12 +81,21 @@ export class WebSocketTransport implements Transport {
         }
     }
     async close(): Promise<void> {
+        this.ws.removeEventListener("message", this.messageListener)
+        this.ws.removeEventListener("close", this.closeListener)
+        for (const channel of this.channels) channel?.close()
         // do nothing, we don't own this ws, the stream owns the ws
         // -> maybe we changed protocol
         this.logger?.debug("Web Socket transport close called, not closing Web Socket because it might still be needed")
     }
     async getStats(): Promise<Record<string, StatValue>> {
-        return {}
+        return {
+            websocketReceivedMessages: this.receivedMessages,
+            websocketReceivedBytes: this.receivedBytes,
+            websocketSendBufferedBytes: this.ws.bufferedAmount,
+            websocketLastReceiveAgeMs: this.lastMessageAt == null ? 0 : performance.now() - this.lastMessageAt,
+            websocketMaxReceiveGapMs: this.maxReceiveGapMs,
+        }
     }
 
 }
@@ -84,7 +112,6 @@ class WebSocketDataTransportChannel implements DataTransportChannel {
         this.id = id
         this.buffer = buffer
 
-        this.ws.addEventListener("message", this.onMessage.bind(this))
     }
 
     canReceive: boolean = true
@@ -101,30 +128,15 @@ class WebSocketDataTransportChannel implements DataTransportChannel {
         }
     }
 
-    private onMessage(event: MessageEvent) {
-        const data = event.data
-        if (!(data instanceof ArrayBuffer)) {
-            return
-        }
-
-        this.buffer.reset()
-
-        this.buffer.putU8Array(new Uint8Array(data))
-
-        this.buffer.flip()
-
-        const id = this.buffer.getU8()
-        if (id != this.id) {
-            return
-        }
-
-        const buffer = this.buffer.getRemainingBuffer()
+    receive(data: ArrayBuffer) {
+        if (!this.canReceive) return
         for (const listener of this.receiveListeners) {
-            listener(buffer.buffer)
+            listener(data)
         }
     }
 
     send(message: ArrayBuffer): void {
+        if (!this.canSend) return
         this.buffer.reset()
 
         this.buffer.putU8(this.id)
@@ -136,10 +148,12 @@ class WebSocketDataTransportChannel implements DataTransportChannel {
     }
 
     estimatedBufferedBytes(): number | null {
-        return null
+        return this.ws.bufferedAmount
     }
 
     close() {
-        this.ws.removeEventListener("message", this.onMessage.bind(this))
+        this.canReceive = false
+        this.canSend = false
+        this.receiveListeners = []
     }
 }

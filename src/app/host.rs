@@ -92,9 +92,15 @@ impl Host {
 
         let app = self.app.access()?;
 
-        self.cache_storage = None;
-
         app.storage.modify_host(self.id, modify).await?;
+
+        // AR-05: the storage call is only a success once the change is durable, so
+        // the handle cache is dropped after the commit rather than before it. A
+        // failed write leaves the previous cached view intact instead of making the
+        // caller believe the new values were published.
+        self.cache_storage = None;
+        // A changed address/port/ownership makes the cached server info stale too.
+        self.cache_host_info = None;
 
         Ok(())
     }
@@ -509,13 +515,20 @@ impl Host {
         if host.owner == Some(user.id())
             || matches!(user.role().await?.ty().await?, RoleType::Admin)
         {
-            {
-                let mut app_images = app.app_image_cache.write().await;
-                app_images.retain(|(_, host_id, _), _| *host_id != self.id);
-            }
-
+            let host_id = self.id;
+            // Keep our own handle: `delete_no_auth` consumes the host.
+            let app_ref = self.app.clone();
             drop(app);
-            self.delete_no_auth().await
+            // AR-05: the host row is only gone once the storage reports a durable
+            // commit, so the stream/app-image caches are invalidated afterwards
+            // rather than in anticipation of it.
+            self.delete_no_auth().await?;
+
+            let app = app_ref.access()?;
+            let mut app_images = app.app_image_cache.write().await;
+            app_images.retain(|(_, cached_host_id, _), _| *cached_host_id != host_id);
+
+            Ok(())
         } else {
             Err(AppError::Forbidden)
         }
@@ -523,8 +536,8 @@ impl Host {
     pub async fn delete_no_auth(self) -> Result<(), AppError> {
         let app = self.app.access()?;
 
-        app.storage.remove_host(self.id).await?;
-
-        Ok(())
+        // The 30-second stream/app-image caches are keyed by host, so they must not
+        // outlive a committed removal; the storage call is the commit point.
+        app.storage.remove_host(self.id).await
     }
 }

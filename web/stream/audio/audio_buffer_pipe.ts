@@ -58,6 +58,17 @@ export class AudioBufferPipe implements PcmAudioPlayer {
     }
 
     private nextAudioPlayTime: number | null = null
+    private scheduled = new Set<AudioBufferSourceNode>()
+    private resyncs = 0
+    private underruns = 0
+
+    private clearScheduled() {
+        for (const source of this.scheduled) {
+            try { source.stop() } catch { /* already stopped */ }
+            source.disconnect()
+        }
+        this.scheduled.clear()
+    }
 
     playPcm(unit: AudioPcmUnit): void {
         if (!this.node) {
@@ -80,6 +91,8 @@ export class AudioBufferPipe implements PcmAudioPlayer {
 
         // Too far ahead -> gently pull back audio
         if (ahead > MAX_LATENCY_SECS) {
+            this.clearScheduled()
+            this.resyncs++
             console.debug("Audio too far ahead, trimming latency");
             this.nextAudioPlayTime = now + TARGET_LATENCY_SECS;
             ahead = TARGET_LATENCY_SECS;
@@ -87,6 +100,7 @@ export class AudioBufferPipe implements PcmAudioPlayer {
 
         // Underrun -> jump forward
         if (ahead < 0) {
+            this.underruns++
             console.debug("Audio underrun")
 
             // We are behind (underrun), jump to current time + small buffer
@@ -107,10 +121,28 @@ export class AudioBufferPipe implements PcmAudioPlayer {
         source.buffer = buffer
         source.connect(this.node)
 
+        this.scheduled.add(source)
+        source.onended = () => { this.scheduled.delete(source); source.disconnect() }
         source.start(this.nextAudioPlayTime)
         this.nextAudioPlayTime += buffer.duration
 
-        source.onended = () => source.disconnect()
+    }
+
+    async reportStats(stats: Record<string, StatValue>): Promise<void> {
+        await this.base.reportStats?.(stats)
+        stats.audioPcmScheduled = this.scheduled.size
+        stats.audioPcmPendingMs = Math.max(0, (this.nextAudioPlayTime ?? 0) - this.base.getAudioContext().currentTime) * 1000
+        stats.audioPcmResyncs = this.resyncs
+        stats.audioPcmUnderruns = this.underruns
+    }
+
+    cleanup() {
+        this.clearScheduled()
+        this.nextAudioPlayTime = null
+        this.node?.disconnect()
+        this.node = null
+        const base = this.base as typeof this.base & { cleanup?(): void }
+        base.cleanup?.()
     }
 
     getBase(): Pipe | null {

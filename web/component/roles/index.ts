@@ -34,12 +34,27 @@ export class Role implements Component {
     private role: DetailedRole | { id: number }
 
     private div = document.createElement("div")
+    private avatarElement = document.createElement("span")
+    private copyElement = document.createElement("div")
     private nameElement = document.createElement("p")
+    private metaElement = document.createElement("p")
+    private chevronElement = document.createElement("span")
 
     constructor(api: Api, role: DetailedRole | { id: number }) {
         this.api = api
 
-        this.div.appendChild(this.nameElement)
+        this.div.classList.add("role-card")
+        this.avatarElement.classList.add("role-avatar")
+        this.copyElement.classList.add("role-card-copy")
+        this.nameElement.classList.add("role-card-name")
+        this.metaElement.classList.add("role-card-meta")
+        this.chevronElement.classList.add("role-card-chevron")
+        this.chevronElement.innerText = "›"
+        this.copyElement.appendChild(this.nameElement)
+        this.copyElement.appendChild(this.metaElement)
+        this.div.appendChild(this.avatarElement)
+        this.div.appendChild(this.copyElement)
+        this.div.appendChild(this.chevronElement)
         this.div.addEventListener("click", this.onClick.bind(this))
         this.div.addEventListener("contextmenu", this.onContextMenu.bind(this))
 
@@ -61,7 +76,10 @@ export class Role implements Component {
     updateCache(role: DetailedRole) {
         this.role = role
 
-        this.nameElement.innerText = formatRoleName(role)
+        this.nameElement.innerText = role.name
+        this.avatarElement.innerText = role.name.trim().slice(0, 1).toUpperCase() || "R"
+        this.metaElement.innerText = `ID ${role.id}`
+        this.div.title = formatRoleName(role)
     }
 
     private onClick() {

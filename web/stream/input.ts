@@ -158,6 +158,10 @@ export class StreamInput {
         this.eventTarget.addEventListener("ml-screenkeyboardvisible", listener as any)
     }
 
+    removeScreenKeyboardVisibleEvent(listener: (event: ScreenKeyboardSetVisibleEvent) => void) {
+        this.eventTarget.removeEventListener("ml-screenkeyboardvisible", listener as any)
+    }
+
     // -- On Stream Start
     onStreamStart(capabilities: StreamCapabilities, streamerSize: [number, number]) {
         this.connected = true
@@ -184,11 +188,9 @@ export class StreamInput {
             return
         }
 
-        console.debug("PASTE", data)
 
         const text = data.getData("text/plain")
         if (text) {
-            console.debug("PASTE TEXT", text)
 
             // Before sending text raise all keys
             this.raiseAllKeys()
@@ -219,14 +221,6 @@ export class StreamInput {
 
         const modifiers = convertToModifiers(event)
 
-        if ("debug" in console) {
-            console.debug(
-                isDown ? "DOWN" : "UP",
-                event.code,
-                convertToKey(event),
-                convertToModifiers(event).toString(16)
-            )
-        }
         this.sendKey(isDown, key, modifiers)
     }
 
@@ -235,6 +229,20 @@ export class StreamInput {
             this.sendKey(false, key, 0)
         }
         this.pressedKeys.clear()
+    }
+
+    /// Release every key and mouse button this client sent as pressed (blur, disconnect,
+    /// explicit "release all"). Safe to call repeatedly; nothing is sent when nothing is held.
+    releaseAll() {
+        this.raiseAllKeys()
+        for (const button of Array.from(this.pressedMouseButtons)) {
+            this.sendMouseButton(false, button)
+        }
+        this.pressedMouseButtons.clear()
+    }
+
+    getPressedInputCount(): number {
+        return this.pressedKeys.size + this.pressedMouseButtons.size
     }
 
     // Note: key = StreamKeys.VK_, modifiers = StreamKeyModifiers.
@@ -406,8 +414,16 @@ export class StreamInput {
         this.clampLocalCursorPosition()
         this.sendLocalCursorPosition(reliable)
     }
+    private pressedMouseButtons: Set<number> = new Set()
+
     // Note: button = StreamMouseButton.
     sendMouseButton(isDown: boolean, button: number) {
+        if (isDown) {
+            this.pressedMouseButtons.add(button)
+        } else {
+            this.pressedMouseButtons.delete(button)
+        }
+
         this.buffer.reset()
 
         this.buffer.putU8(2)

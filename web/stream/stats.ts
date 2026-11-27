@@ -1,5 +1,4 @@
 import { StreamerStatsUpdate, TransportChannelId } from "../api_bindings.js"
-import { BIG_BUFFER, ByteBuffer } from "./buffer.js"
 import { Logger } from "./log.js"
 import { Pipe } from "./pipeline/index.js"
 import { DataTransportChannel, Transport } from "./transport/index.js"
@@ -88,12 +87,18 @@ export class StreamStats {
     private logger: Logger | null = null
 
     private enabled: boolean = false
+    private collectionEnabled: boolean = false
     private transport: Transport | null = null
     private statsChannel: DataTransportChannel | null = null
     private updateIntervalId: number | null = null
+    private readonly rawDataListener = this.onRawData.bind(this)
 
     private videoPipe: Pipe | null = null
     private audioPipe: Pipe | null = null
+    private taskObserver: PerformanceObserver | null = null
+    private taskCount = 0
+    private taskMaxMs = 0
+    private taskTotalMs = 0
     private statsData: StreamStatsData = {
         videoCodec: null,
         videoWidth: null,
@@ -123,30 +128,53 @@ export class StreamStats {
     }
 
     setTransport(transport: Transport) {
+        if (this.statsChannel) {
+            this.statsChannel.removeReceiveListener(this.rawDataListener)
+            this.statsChannel = null
+        }
         this.transport = transport
-
+        this.statsData.transport = {}
+        this.statsData.browserRtt = null
+        this.statsData.streamerRttMs = null
+        this.statsData.avgHostProcessingLatencyMs = null
+        this.statsData.avgStreamerProcessingTimeMs = null
         this.checkEnabled()
     }
     private checkEnabled() {
-        if (this.enabled) {
-            if (this.statsChannel) {
-                this.statsChannel.removeReceiveListener(this.onRawData.bind(this))
-                this.statsChannel = null
-            }
-
+        const shouldCollect = this.enabled || this.collectionEnabled
+        if (shouldCollect && !this.taskObserver && typeof PerformanceObserver !== "undefined" && PerformanceObserver.supportedEntryTypes?.indexOf("longtask") !== -1) {
+            try {
+                this.taskObserver = new PerformanceObserver(list => {
+                    for (const entry of list.getEntries()) {
+                        this.taskCount++
+                        this.taskMaxMs = Math.max(this.taskMaxMs, entry.duration)
+                        this.taskTotalMs += entry.duration
+                    }
+                })
+                this.taskObserver.observe({ entryTypes: ["longtask"] })
+            } catch { this.taskObserver?.disconnect(); this.taskObserver = null }
+        } else if (!shouldCollect) {
+            this.taskObserver?.disconnect()
+            this.taskObserver = null
+        }
+        if (shouldCollect) {
             if (!this.statsChannel && this.transport) {
                 const channel = this.transport.getChannel(TransportChannelId.STATS)
                 if (channel.type != "data") {
                     this.logger?.debug(`Failed initialize debug transport channel because type is "${channel.type}" and not "data"`)
                     return
                 }
-                channel.addReceiveListener(this.onRawData.bind(this))
+                channel.addReceiveListener(this.rawDataListener)
                 this.statsChannel = channel
             }
             if (this.updateIntervalId == null) {
                 this.updateIntervalId = setInterval(this.updateLocalStats.bind(this), 1000)
             }
         } else {
+            if (this.statsChannel) {
+                this.statsChannel.removeReceiveListener(this.rawDataListener)
+                this.statsChannel = null
+            }
             if (this.updateIntervalId != null) {
                 clearInterval(this.updateIntervalId)
                 this.updateIntervalId = null
@@ -154,9 +182,13 @@ export class StreamStats {
         }
     }
 
+    setCollectionEnabled(enabled: boolean) {
+        this.collectionEnabled = enabled
+        this.checkEnabled()
+    }
+
     setEnabled(enabled: boolean) {
         this.enabled = enabled
-
         this.checkEnabled()
     }
     isEnabled(): boolean {
@@ -166,18 +198,24 @@ export class StreamStats {
         this.setEnabled(!this.isEnabled())
     }
 
-    private buffer: ByteBuffer = BIG_BUFFER
     private onRawData(data: ArrayBuffer) {
-        this.buffer.reset()
-        this.buffer.putU8Array(new Uint8Array(data))
+        const bytes = new Uint8Array(data)
+        if (bytes.byteLength < 2) {
+            return
+        }
 
-        this.buffer.flip()
+        const textLength = (bytes[0] << 8) | bytes[1]
+        if (textLength > bytes.byteLength - 2) {
+            return
+        }
 
-        const textLength = this.buffer.getU16()
-        const text = this.buffer.getUtf8Raw(textLength)
-
-        const json: StreamerStatsUpdate = JSON.parse(text)
-        this.onMessage(json)
+        try {
+            const text = new TextDecoder().decode(bytes.subarray(2, 2 + textLength))
+            const json: StreamerStatsUpdate = JSON.parse(text)
+            this.onMessage(json)
+        } catch (error) {
+            this.logger?.debug(`Failed to parse streamer stats message: ${String(error)}`)
+        }
     }
     private onMessage(msg: StreamerStatsUpdate) {
         if ("Rtt" in msg) {
@@ -215,7 +253,9 @@ export class StreamStats {
             return
         }
 
-        const stats = await this.transport?.getStats()
+        const transport = this.transport
+        const stats = await transport.getStats()
+        if (this.transport !== transport) return
         for (const key in stats) {
             const value = stats[key]
 
@@ -224,21 +264,23 @@ export class StreamStats {
     }
     private async updateVideoStats() {
         const stats = {}
+        const pipe = this.videoPipe
 
         if (this.videoPipe && this.videoPipe.reportStats) {
-            this.videoPipe.reportStats(stats)
+            await this.videoPipe.reportStats(stats)
         }
 
-        this.statsData.video = stats
+        if (this.videoPipe === pipe) this.statsData.video = stats
     }
     private async updateAudioStats() {
         const stats = {}
+        const pipe = this.audioPipe
 
         if (this.audioPipe && this.audioPipe.reportStats) {
-            this.audioPipe.reportStats(stats)
+            await this.audioPipe.reportStats(stats)
         }
 
-        this.statsData.audio = stats
+        if (this.audioPipe === pipe) this.statsData.audio = stats
     }
 
     setVideoInfo(codec: string, width: number, height: number, fps: number) {
@@ -260,8 +302,8 @@ export class StreamStats {
     }
 
     getCurrentStats(): StreamStatsData {
-        const data = {}
-        Object.assign(data, this.statsData)
-        return data as StreamStatsData
+        return { ...this.statsData, transport: { ...this.statsData.transport,
+            browserLongTaskSupported: this.taskObserver ? 1 : 0,
+            browserLongTaskCount: this.taskCount, browserLongTaskMaxMs: this.taskMaxMs, browserLongTaskTotalMs: this.taskTotalMs } }
     }
 }

@@ -23,17 +23,50 @@ export function getTranslations(language: Language): Translations {
     return locales[language]
 }
 
+const ALIASES: Record<string, Language> = {
+    "zh": "zh-CN",
+    "zh-CN": "zh-CN",
+    "zh_CN": "zh-CN",
+    "pt": "pt-BR",
+    "pt-BR": "pt-BR",
+    "pt_BR": "pt-BR",
+    "ko": "ko-KR",
+    "ko-KR": "ko-KR",
+    "ko_KR": "ko-KR",
+    "en": "en",
+    "en-US": "en",
+    "en_US": "en",
+    "en-GB": "en",
+    "en_GB": "en",
+    "fr": "fr-FR",
+    "fr-FR": "fr-FR",
+    "fr_FR": "fr-FR",
+}
+
+// Korean is the local default. That is a fallback for missing/unsupported values only:
+// a supported Language the user picked (en, fr-FR, ...) must be preserved as-is,
+// otherwise every reload silently reverts the choice to Korean.
 export function normalizeLanguage(language: unknown): Language {
-    if (language === "zh" || language === "zh-CN" || language === "zh_CN") {
-        return "zh-CN"
-    }
-    if (language === "pt" || language === "pt-BR" || language === "pt_BR") {
-        return "pt-BR"
-    }
-    if (language === "ko" || language === "ko-KR" || language === "ko_KR") {
+    if (typeof language != "string") {
         return "ko-KR"
     }
-    return "en"
+
+    const alias = ALIASES[language]
+    if (alias) {
+        return alias
+    }
+
+    // Accept any regional variant of a supported base language, e.g. "fr-CA" or "zh-TW".
+    const base = language.split(/[-_]/)[0].toLowerCase()
+    const byBase: Record<string, Language> = {
+        "zh": "zh-CN",
+        "pt": "pt-BR",
+        "ko": "ko-KR",
+        "en": "en",
+        "fr": "fr-FR",
+    }
+
+    return byBase[base] ?? "ko-KR"
 }
 
 function getStoredSettings(): Record<string, unknown> | null {
@@ -53,23 +86,21 @@ export function hasStoredLanguage(): boolean {
     return getStoredSettings()?.language != null
 }
 
-export function adoptRoleDefaultLanguage(roleDefaultSettings: { language?: unknown } | null | undefined): boolean {
+export function adoptRoleDefaultLanguage(_roleDefaultSettings: { language?: unknown } | null | undefined): boolean {
     if (hasStoredLanguage()) {
         return false
     }
 
-    const roleLanguage = normalizeLanguage(roleDefaultSettings?.language)
-    if (roleLanguage === getCurrentLanguage()) {
-        return false
-    }
-
+    // This local fork is Korean-first. Persist the preference on first visit;
+    // users can still select another language in Settings afterwards.
+    const preferredLanguage: Language = "ko-KR"
     try {
         const settings = getStoredSettings() ?? {}
-        settings.language = roleLanguage
+        settings.language = preferredLanguage
         localStorage.setItem("mlSettings", JSON.stringify(settings))
         return true
     } catch {
-        localStorage.setItem("mlSettings", JSON.stringify({ language: roleLanguage }))
+        localStorage.setItem("mlSettings", JSON.stringify({ language: preferredLanguage }))
         return true
     }
 }

@@ -57,6 +57,43 @@ export class AudioElementPlayer implements TrackAudioPlayer {
         this.audioElement.muted = false
     }
 
+    // -- Output access for the desktop audio controls (state + user-gesture recovery)
+    private autoplayRejected = false
+
+    getAudioElement(): HTMLAudioElement {
+        return this.audioElement
+    }
+    getOutputState() {
+        return {
+            kind: "element" as const,
+            muted: this.audioElement.muted === true,
+            paused: this.audioElement.paused === true,
+            autoplayRejected: this.autoplayRejected,
+            hasTrack: this.oldTrack != null,
+            trackEnded: this.oldTrack?.readyState === "ended",
+        }
+    }
+    /// Reattach this player's own MediaStream and resume playback. Never touches the
+    /// transport: the track keeps coming from the same receiver.
+    async recoverOutput(): Promise<void> {
+        if (this.audioElement.srcObject !== this.stream) {
+            this.audioElement.srcObject = this.stream
+        }
+        this.audioElement.muted = false
+        try {
+            await this.audioElement.play()
+            this.autoplayRejected = false
+        } catch (error) {
+            if (error instanceof Error && error.name == "NotAllowedError") {
+                this.autoplayRejected = true
+            }
+            throw error
+        }
+    }
+    getSinkTarget(): { setSinkId?: (id: string) => Promise<void> } {
+        return this.audioElement as unknown as { setSinkId?: (id: string) => Promise<void> }
+    }
+
     mount(parent: HTMLElement): void {
         parent.appendChild(this.audioElement)
     }

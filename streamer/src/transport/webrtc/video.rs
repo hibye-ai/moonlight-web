@@ -16,6 +16,8 @@ use moonlight_common::stream::video::{
     DecodeResult, FrameType, VideoDecodeUnit, VideoFormat, VideoFormats, VideoSetup,
 };
 use tokio::runtime::Handle;
+use std::time::{Duration, Instant};
+use super::{pacing::VideoPacing, sender::epoch_ms};
 use tracing::{debug, error, info, trace, warn};
 use webrtc::{
     api::media_engine::{MIME_TYPE_AV1, MIME_TYPE_H264, MIME_TYPE_HEVC, MediaEngine},
@@ -77,6 +79,8 @@ pub struct WebRtcVideo {
     clock_rate: u32,
     codec: Option<VideoCodec>,
     samples: Vec<BytesMut>,
+    pacing: Arc<VideoPacing>,
+    metrics_logged_at: Instant,
 }
 
 impl WebRtcVideo {
@@ -88,11 +92,18 @@ impl WebRtcVideo {
             codec: None,
             supported_video_formats: VideoFormats::empty(),
             samples: Default::default(),
+            pacing: Arc::new(VideoPacing::default()),
+            metrics_logged_at: Instant::now(),
         }
     }
 
     pub async fn set_codecs(&mut self, supported_codecs: VideoFormats) {
         self.supported_video_formats = supported_codecs;
+    }
+
+    /// Stop the video sample sender and RTCP reader tasks.
+    pub async fn shutdown(&mut self) {
+        self.sender.shutdown().await;
     }
 
     pub async fn setup(
@@ -106,6 +117,7 @@ impl WebRtcVideo {
         }: VideoSetup,
     ) -> bool {
         info!("[Stream] Stream setup: {width}x{height}x{redraw_rate} and {format:?}");
+        self.pacing.set_fps(redraw_rate as u32);
 
         if !format.contained_in(self.supported_video_formats) {
             let message = format!(
@@ -141,14 +153,14 @@ impl WebRtcVideo {
         if let Err(err) = self
             .sender
             .create_track(
-                TrackLocalStaticRTP::new(
+                SequencedTrackLocalStaticRTP::with_pacing(TrackLocalStaticRTP::new(
                     codec.capability.clone(),
                     "video".to_string(),
                     "moonlight".to_string(),
-                )
-                .into(),
+                ), self.pacing.clone()),
                 {
                     let needs_idr = needs_idr.clone();
+                    let pacing = self.pacing.clone();
 
                     move |packet| {
                         let packet = packet.as_any();
@@ -156,10 +168,12 @@ impl WebRtcVideo {
                         if packet.is::<PictureLossIndication>() {
                             needs_idr.store(true, Ordering::Release);
                         }
-                        if let Some(_max_bitrate) =
+                        if let Some(max_bitrate) =
                             packet.downcast_ref::<ReceiverEstimatedMaximumBitrate>()
                         {
-                            // Moonlight doesn't support dynamic bitrate changing :(
+                            // Encoder bitrate remains unchanged; feedback only
+                            // influences a bounded intra-frame pacing window.
+                            pacing.observe_receiver_bitrate(max_bitrate.bitrate, epoch_ms());
                         }
                     }
                 },
@@ -215,6 +229,12 @@ impl WebRtcVideo {
     }
 
     pub async fn send_decode_unit(&mut self, unit: &VideoDecodeUnit<&[u8]>) -> DecodeResult {
+        if self.metrics_logged_at.elapsed() >= Duration::from_secs(10) {
+            let m = self.sender.metrics();
+            info!("video_sender queue_depth={} max_queue_depth={} rejected_frames={} written_packets={} write_errors={} max_write_stall_ms={} receiver_bps={} pacing_cap_ms=12",
+                m.queue_depth(), m.max_queue_depth(), m.rejected_samples(), m.written_samples(), m.write_errors(), m.max_write_stall_micros()/1000, self.pacing.receiver_bps(epoch_ms()));
+            self.metrics_logged_at = Instant::now();
+        }
         let timestamp = (unit.timestamp.as_nanos() * 90000 / 1_000_000_000) as u32;
 
         let mut full_frame = Vec::new();
@@ -362,7 +382,8 @@ async fn send_single_frame(
     needs_idr: &AtomicBool,
 ) {
     if important {
-        sender.clear_queue(false).await;
+        // A new IDR supersedes every queued frame, including old IDRs.
+        sender.clear_queue(true).await;
     }
 
     let mut peekable = samples.drain(..).peekable();

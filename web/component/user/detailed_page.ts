@@ -31,6 +31,19 @@ export class DetailedUserPage implements Component {
 
         this.formRoot.classList.add("user-info")
 
+        const header = document.createElement("div")
+        header.classList.add("user-info-header")
+        const headerCopy = document.createElement("div")
+        headerCopy.classList.add("user-info-header-copy")
+        const title = document.createElement("h2")
+        title.innerText = user.name
+        const meta = document.createElement("p")
+        meta.innerText = `ID ${user.id} · ${user.role}`
+        headerCopy.appendChild(title)
+        headerCopy.appendChild(meta)
+        header.appendChild(headerCopy)
+        this.formRoot.appendChild(header)
+
         this.idElement = new InputComponent("userId", "number", i.userId, {
             defaultValue: `${user.id}`
         })
@@ -65,15 +78,20 @@ export class DetailedUserPage implements Component {
         })
         this.clientUniqueId.mount(this.formRoot)
 
+        const actions = document.createElement("div")
+        actions.classList.add("user-info-actions")
+
+        this.applyButton.classList.add("user-info-apply")
         this.applyButton.innerText = i.apply
         this.applyButton.type = "submit"
-        this.formRoot.appendChild(this.applyButton)
+        actions.appendChild(this.applyButton)
 
         this.deleteButton.addEventListener("click", this.delete.bind(this))
         this.deleteButton.classList.add("user-info-delete")
         this.deleteButton.innerText = i.delete
         this.deleteButton.type = "button"
-        this.formRoot.appendChild(this.deleteButton)
+        actions.appendChild(this.deleteButton)
+        this.formRoot.appendChild(actions)
 
         this.formRoot.addEventListener("submit", this.apply.bind(this))
     }

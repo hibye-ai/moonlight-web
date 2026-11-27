@@ -29,6 +29,10 @@ ts-rs = { workspace = true, features = ["uuid-impl"] }
 
 thiserror = { workspace = true }
 
+[dev-dependencies]
+# Test-only: captures the rendered trace output for the MW-21 redaction tests.
+tracing-subscriber = { workspace = true, features = ["fmt"] }
+
 [lints]
 workspace = true
 

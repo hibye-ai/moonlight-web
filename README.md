@@ -1,3 +1,15 @@
+# Moonlight Web — community fork
+
+This repository contains a modified version of [MrCreativ3001/moonlight-web-stream](https://github.com/MrCreativ3001/moonlight-web-stream), based on upstream [v2.10.0 (cd9d03c)](https://github.com/MrCreativ3001/moonlight-web-stream/commit/cd9d03cbf9a42b394f7b72a733a2f39cb5f0edd8). This is an unofficial fork.
+
+The fork was modified in October–November 2026. It adds a redesigned web interface, revised keyboard and desktop controls, optional clipboard integration, streaming diagnostics, and WebRTC pacing changes. See [CHANGES.md](CHANGES.md) for the source snapshot and build instructions.
+
+The program is available under the GNU GPL version 3 or later. The original notices and [GPL text](LICENSE) remain in the repository. The bundled Pretendard font has its own [SIL Open Font License](web/resources/fonts/OFL-Pretendard.txt).
+
+## Upstream documentation
+
+The original instructions below describe upstream Moonlight Web. To build this fork from source, see [Build this fork](CHANGES.md#build-this-fork).
+
 
 # Moonlight Web
 An unofficial [Moonlight Client](https://moonlight-stream.org/) allowing you to stream your pc to the Web.

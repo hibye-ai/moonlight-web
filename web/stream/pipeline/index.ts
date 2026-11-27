@@ -11,13 +11,14 @@ import { CanvasFrameDrawPipe, CanvasRgbaFrameDrawPipe, CanvasYuv420FrameDrawPipe
 import { DepacketizeVideoPipe } from "../video/depackitize_pipe.js";
 import { VideoMediaStreamTrackGeneratorPipe } from "../video/media_stream_track_generator_pipe.js";
 import { VideoMediaStreamTrackProcessorPipe } from "../video/media_stream_track_processor_pipe.js";
-import { WorkerDataToCanvasGlRenderOpenH264Pipe, WorkerDataToVideoTrackPipe, WorkerVideoMediaStreamProcessorCanvasPipe, WorkerVideoMediaStreamProcessorPipe } from "../video/pipeline.js";
+import { WorkerDataToCanvasGlRenderOpenH264Pipe, WorkerDataToCanvasWebCodecsPipe, WorkerDataToVideoTrackPipe, WorkerVideoMediaStreamProcessorCanvasPipe, WorkerVideoMediaStreamProcessorPipe } from "../video/pipeline.js";
 import { VideoDecoderPipe } from "../video/video_decoder_pipe.js";
 import { VideoTrackGeneratorPipe } from "../video/video_track_generator.js";
 import { WorkerDataReceivePipe, WorkerDataSendPipe, WorkerOffscreenCanvasSendPipe, WorkerVideoDataReceivePipe, WorkerVideoDataSendPipe, WorkerVideoFrameReceivePipe, WorkerVideoFrameSendPipe, WorkerVideoTrackReceivePipe, WorkerVideoTrackSendPipe } from "./worker_io.js";
 import { StatValue } from "../stats.js";
 import { Yuv420ToRgbaFramePipe } from "../video/video_frame.js";
 import { MediaSourceDecoder } from "../video/media_source_decoder.js";
+import { AudioWorkletPcmPipe } from "../audio/audio_worklet_pipe.js";
 
 export interface Pipe {
     readonly implementationName: string
@@ -38,7 +39,7 @@ export interface PipeInfoStatic {
 export interface PipeStatic extends PipeInfoStatic, InputPipeStatic {
     readonly type: string
 
-    new(base: any, logger?: Logger): Pipe
+    new(base: any, logger?: Logger, options?: unknown): Pipe
 }
 
 export interface InputPipeStatic {
@@ -94,7 +95,7 @@ export function buildPipeline(base: OutputPipeStatic, pipeline: Pipeline, logger
         }
 
         previousPipeStatic = currentPipe
-        pipe = new currentPipe(pipe, logger)
+        pipe = new currentPipe(pipe, logger, rendererOptions)
     }
 
     return pipe
@@ -102,24 +103,43 @@ export function buildPipeline(base: OutputPipeStatic, pipeline: Pipeline, logger
 
 let PIPE_INFO: Promise<Map<PipeStatic, PipeInfo>> | null
 
-export function gatherPipeInfo(): Promise<Map<PipeStatic, PipeInfo>> {
+export function gatherPipeInfo(options?: { pipes?: Array<PipeStatic> }): Promise<Map<PipeStatic, PipeInfo>> {
+    if (options?.pipes) {
+        // Explicit candidate list (used by tests and by transports that only need a
+        // subset); never cached, so it cannot poison the shared map.
+        return gatherPipeInfoInternal(options.pipes)
+    }
+
     if (PIPE_INFO) {
         return PIPE_INFO
     } else {
-        PIPE_INFO = gatherPipeInfoInternal()
+        PIPE_INFO = gatherPipeInfoInternal(pipes())
         return PIPE_INFO
     }
 }
-async function gatherPipeInfoInternal(): Promise<Map<PipeStatic, PipeInfo>> {
+
+/// Drop the cached capability map so the probes run again (e.g. after a browser policy
+/// change or a transient worker load failure).
+export function resetPipeInfoCache() {
+    PIPE_INFO = null
+}
+
+async function gatherPipeInfoInternal(all: Array<PipeStatic>): Promise<Map<PipeStatic, PipeInfo>> {
     const map = new Map()
 
+    // Each probe is isolated: a pipe that cannot be probed is recorded as unsupported
+    // instead of rejecting the whole batch and blocking every other pipeline (including
+    // the transports that are unrelated to it).
     const promises = []
-
-    const all: Array<PipeStatic> = pipes()
     for (const pipe of all) {
-        promises.push(pipe.getInfo().then(info => {
-            map.set(pipe, info)
-        }))
+        promises.push(Promise.resolve()
+            .then(() => pipe.getInfo())
+            .then(info => {
+                map.set(pipe, info ?? { environmentSupported: false })
+            })
+            .catch(() => {
+                map.set(pipe, { environmentSupported: false })
+            }))
     }
 
     await Promise.all(promises)
@@ -156,12 +176,14 @@ export function pipes(): Array<PipeStatic> {
         WorkerVideoMediaStreamProcessorCanvasPipe,
         WorkerDataToVideoTrackPipe,
         WorkerDataToCanvasGlRenderOpenH264Pipe,
+        WorkerDataToCanvasWebCodecsPipe,
         // Audio
         DepacketizeAudioPipe,
         AudioMediaStreamTrackGeneratorPipe,
         AudioDecoderPipe,
         OpusAudioDecoderPipe,
         AudioBufferPipe,
+        AudioWorkletPcmPipe,
         AudioContextTrackPipe,
     ]
 }

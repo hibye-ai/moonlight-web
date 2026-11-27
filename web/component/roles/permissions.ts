@@ -33,6 +33,7 @@ export class RolePermissionsMenu implements Component {
 
     constructor(permissions: StreamPermissions = defaultRolePermissions()) {
         const i = getTranslations(getCurrentLanguage()).admin
+        this.rootDiv.classList.add("role-permissions")
         // Allow Add Hosts
         this.allowAddHosts = new InputComponent("allowAddHosts", "checkbox", i.allowAddHosts, {
             checked: permissions.allow_add_hosts,

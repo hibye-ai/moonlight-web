@@ -41,6 +41,14 @@ export function setContextMenu(event: MouseEvent, init?: ContextMenuInit) {
 
     contextMenuList.mount(contextMenuElement)
     contextMenuElement.classList.remove("context-menu-disabled")
+
+    // Keep the menu inside the viewport
+    const rect = contextMenuElement.getBoundingClientRect()
+    const margin = 8
+    const left = Math.max(margin, Math.min(event.clientX, window.innerWidth - rect.width - margin))
+    const top = Math.max(margin, Math.min(event.clientY, window.innerHeight - rect.height - margin))
+    contextMenuElement.style.setProperty("left", `${left}px`)
+    contextMenuElement.style.setProperty("top", `${top}px`)
 }
 
 export function removeContextMenu() {
@@ -54,12 +62,13 @@ export function removeContextMenu() {
 }
 
 class ContextMenuElementComponent implements Component {
-    private nameElement: HTMLElement = document.createElement("p")
+    private nameElement: HTMLElement = document.createElement("button")
 
     constructor(element: ContextMenuElement) {
         this.nameElement.innerText = element.name
 
         this.nameElement.classList.add("context-menu-element")
+        this.nameElement.setAttribute("type", "button")
 
         this.nameElement.addEventListener("click", event => {
             element.callback(event)

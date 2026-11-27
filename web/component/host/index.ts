@@ -5,7 +5,8 @@ import { getCurrentLanguage, getTranslations } from "../../i18n.js"
 import { setContextMenu } from "../context_menu.js"
 import { showNotification } from "../notification.js"
 import { showMessage } from "../modal/index.js"
-import { HOST_IMAGE, HOST_OVERLAY_LOCK, HOST_OVERLAY_NONE, HOST_OVERLAY_OFFLINE } from "../../resources/index.js"
+import { icon } from "../icons.js"
+import { makeIconButton } from "../shell.js"
 
 export type HostEventListener = (event: ComponentEvent<Host>) => void
 
@@ -18,9 +19,13 @@ export class Host implements Component {
 
     private divElement: HTMLDivElement = document.createElement("div")
 
-    private imageElement: HTMLImageElement = document.createElement("img")
-    private imageOverlayElement: HTMLImageElement = document.createElement("img")
-    private nameElement: HTMLElement = document.createElement("p")
+    private cardElement: HTMLDivElement = document.createElement("div")
+    private visualElement: HTMLDivElement = document.createElement("div")
+    private badgeElement: HTMLSpanElement = document.createElement("span")
+    private nameElement: HTMLElement = document.createElement("h3")
+    private statusElement: HTMLSpanElement = document.createElement("span")
+    private ownerElement: HTMLSpanElement = document.createElement("span")
+    private moreButton: HTMLButtonElement
 
     constructor(api: Api, hostId: number, host: UndetailedHost | DetailedHost | null) {
         this.api = api
@@ -28,20 +33,43 @@ export class Host implements Component {
         this.hostId = hostId
         this.cache = host
 
-        // Configure image
-        this.imageElement.classList.add("host-image")
-        this.imageElement.src = HOST_IMAGE
+        const ui = getTranslations(getCurrentLanguage()).ui
 
-        // Configure image overlay
-        this.imageOverlayElement.classList.add("host-image-overlay")
+        this.cardElement.classList.add("host-tile", "is-loading")
+        this.cardElement.tabIndex = 0
+        this.cardElement.setAttribute("role", "button")
 
-        // Configure name
+        this.visualElement.classList.add("host-visual")
+        this.visualElement.appendChild(icon("monitor", "host-glyph"))
+        this.badgeElement.classList.add("host-badge")
+        this.visualElement.appendChild(this.badgeElement)
+
+        const top = document.createElement("div")
+        top.classList.add("host-tile-top")
+        this.statusElement.classList.add("status-chip")
+        this.moreButton = makeIconButton("more", ui.more)
+        this.moreButton.classList.add("tile-more")
+        this.moreButton.addEventListener("click", event => {
+            event.stopPropagation()
+            this.onContextMenu(event)
+        })
+        top.append(this.statusElement, this.moreButton)
+
+        const copy = document.createElement("div")
+        copy.classList.add("host-tile-copy")
         this.nameElement.classList.add("host-name")
+        this.ownerElement.classList.add("host-owner")
+        copy.append(this.nameElement, this.ownerElement)
 
-        // Append elements
-        this.divElement.appendChild(this.imageElement)
-        this.divElement.appendChild(this.imageOverlayElement)
-        this.divElement.appendChild(this.nameElement)
+        this.cardElement.append(top, this.visualElement, copy)
+        this.divElement.appendChild(this.cardElement)
+
+        this.cardElement.addEventListener("keydown", event => {
+            if (event.key == "Enter" || event.key == " ") {
+                event.preventDefault()
+                this.cardElement.click()
+            }
+        })
 
         this.divElement.addEventListener("click", this.onClick.bind(this))
         this.divElement.addEventListener("contextmenu", this.onContextMenu.bind(this))
@@ -242,19 +270,43 @@ export class Host implements Component {
         showMessage(i.pairPrompt(this.getCache()?.name ?? "", responseStream.response.Pin), { signal: messageAbort.signal })
 
         const resultResponse = await responseStream.next()
-        messageAbort.abort()
 
         if (!resultResponse) {
-            throw "missing stage 2 of pairing"
-        } else if (typeof resultResponse == "string") {
+            // Stream ended without a stage-2 result (host not ready / gave up).
+            // Keep the PIN modal open so the user can still enter the PIN on the host.
+            return
+        }
+
+        if (typeof resultResponse == "string") {
+            if (resultResponse == "PairError") {
+                // Host rejected the attempt (most common: a stale pairing session is
+                // still open on the host). Keep the PIN modal up with a hint.
+                showMessage(i.pairRetry(responseStream.response?.Pin ?? ""))
+                return
+            }
+            messageAbort.abort()
             throw `failed to pair (stage 2): ${resultResponse}`
         }
 
+        messageAbort.abort()
         this.updateCache(resultResponse.Paired, null)
     }
 
     getHostId(): number {
         return this.hostId
+    }
+
+    /// Shown while the host list is still waiting for this host's live status.
+    setLoading(loading: boolean) {
+        const ui = getTranslations(getCurrentLanguage()).ui
+        if (loading && this.cache?.server_state == null) {
+            this.cardElement.classList.remove("is-offline")
+            this.cardElement.classList.add("is-loading")
+            this.badgeElement.replaceChildren()
+            this.statusElement.innerText = ui.checking
+        } else if (!loading && this.cardElement.classList.contains("is-loading") && this.cache) {
+            this.updateCache(this.cache, null)
+        }
     }
 
     getCache(): DetailedHost | UndetailedHost | null {
@@ -287,13 +339,25 @@ export class Host implements Component {
         // Update Elements
         this.nameElement.innerText = this.cache.name
 
+        this.cardElement.classList.remove("is-online", "is-offline", "is-locked", "is-busy", "is-loading")
+        this.badgeElement.replaceChildren()
         if (this.cache.server_state == null) {
-            this.imageOverlayElement.src = HOST_OVERLAY_OFFLINE
+            this.badgeElement.appendChild(icon("offline"))
+            this.statusElement.innerText = i.offline
+            this.cardElement.classList.add("is-offline")
         } else if (this.cache.paired != "Paired") {
-            this.imageOverlayElement.src = HOST_OVERLAY_LOCK
+            this.badgeElement.appendChild(icon("lock"))
+            this.statusElement.innerText = i.pairRequired
+            this.cardElement.classList.add("is-locked")
         } else {
-            this.imageOverlayElement.src = HOST_OVERLAY_NONE
+            this.statusElement.innerText = i.online
+            this.cardElement.classList.add("is-online")
+            if (this.cache.server_state == "Busy") {
+                this.statusElement.innerText = getTranslations(getCurrentLanguage()).ui.busy
+                this.cardElement.classList.add("is-busy")
+            }
         }
+        this.ownerElement.innerText = this.cache.owner == "Global" ? i.sharedHost : i.privateHost
     }
 
     mount(parent: HTMLElement): void {

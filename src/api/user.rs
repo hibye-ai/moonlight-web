@@ -94,6 +94,7 @@ pub async fn patch_user(
                 .modify(
                     &admin,
                     StorageUserModify {
+                        revoke_sessions: new_password.is_some() || request.role_id.is_some(),
                         password: new_password.map(Some),
                         role_id: request.role_id.map(RoleId),
                         client_unique_id: request.client_unique_id,

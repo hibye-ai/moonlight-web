@@ -6,7 +6,10 @@ members = ["common", "streamer", "./"]
 default-members = ["streamer", "./"]
 
 [profile.release]
-# strip release information
+# Keep release binaries small without changing runtime behavior.
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
 rustflags = ["-Zremap-cwd-prefix=.", "-Zlocation-detail=none"]
 
 [workspace.package]
@@ -88,7 +91,7 @@ default-run = "web-server"
 moonlight-common = { workspace = true }
 common = { workspace = true }
 
-tokio = { workspace = true, features = ["rt-multi-thread", "fs"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "fs", "net", "io-util", "time"] }
 futures-concurrency = "7.7.1"
 
 clap = { workspace = true, features = ["derive", "env"] }
@@ -116,6 +119,7 @@ thiserror.workspace = true
 async-trait.workspace = true
 hex.workspace = true
 sha2 = "0.10.9"
+rustls = { version = "0.23.37", default-features = false, features = ["std", "ring"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_System_Console"] }

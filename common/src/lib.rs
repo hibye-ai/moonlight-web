@@ -9,12 +9,41 @@ pub mod api_bindings_ext;
 pub mod config;
 pub mod ipc;
 
+pub const MAX_STREAM_BITRATE_KBPS: u32 = 500_000;
+pub const MAX_STREAM_FPS: u32 = 240;
+pub const MIN_STREAM_DIMENSION: u32 = 64;
+pub const MAX_STREAM_DIMENSION: u32 = 7_680;
+pub const MAX_STREAM_PIXELS: u64 = 7_680 * 4_320;
+
+/// Applies hard safety limits to untrusted client-provided stream settings.
+/// Role-specific restrictions are applied separately afterwards.
+pub fn apply_absolute_stream_limits(settings: &mut StreamSettings) {
+    settings.bitrate_kbps = settings.bitrate_kbps.clamp(1, MAX_STREAM_BITRATE_KBPS);
+    settings.fps = settings.fps.clamp(1, MAX_STREAM_FPS);
+    settings.width = settings
+        .width
+        .clamp(MIN_STREAM_DIMENSION, MAX_STREAM_DIMENSION);
+    settings.height = settings
+        .height
+        .clamp(MIN_STREAM_DIMENSION, MAX_STREAM_DIMENSION);
+
+    let pixels = u64::from(settings.width) * u64::from(settings.height);
+    if pixels > MAX_STREAM_PIXELS {
+        let scale = (MAX_STREAM_PIXELS as f64 / pixels as f64).sqrt();
+        settings.width = ((settings.width as f64 * scale).floor() as u32)
+            .clamp(MIN_STREAM_DIMENSION, MAX_STREAM_DIMENSION);
+        settings.height = ((settings.height as f64 * scale).floor() as u32)
+            .clamp(MIN_STREAM_DIMENSION, MAX_STREAM_DIMENSION);
+    }
+}
+
 /// Applies the permissions / restrictions to the current settings of the user.
 /// This won't error, it'll just overwrite it, because the GUI should indicate those restrictions.
 pub fn apply_permissions_to_settings(
     permissions: &StreamPermissions,
     settings: &mut StreamSettings,
 ) {
+    apply_absolute_stream_limits(settings);
     let StreamPermissions {
         allow_add_hosts: _,
         maximum_bitrate_kbps,
@@ -61,4 +90,52 @@ where
     };
 
     Some(json)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absolute_stream_limits_clamp_untrusted_values() {
+        let mut settings = StreamSettings {
+            bitrate_kbps: u32::MAX,
+            width: u32::MAX,
+            height: u32::MAX,
+            fps: u32::MAX,
+            play_audio_local: false,
+            supported_codecs: u32::MAX,
+            hdr: false,
+        };
+
+        apply_absolute_stream_limits(&mut settings);
+
+        assert_eq!(settings.bitrate_kbps, MAX_STREAM_BITRATE_KBPS);
+        assert_eq!(settings.fps, MAX_STREAM_FPS);
+        assert!(settings.width >= MIN_STREAM_DIMENSION);
+        assert!(settings.height >= MIN_STREAM_DIMENSION);
+        assert!(settings.width <= MAX_STREAM_DIMENSION);
+        assert!(settings.height <= MAX_STREAM_DIMENSION);
+        assert!(u64::from(settings.width) * u64::from(settings.height) <= MAX_STREAM_PIXELS);
+    }
+
+    #[test]
+    fn absolute_stream_limits_preserve_normal_values() {
+        let mut settings = StreamSettings {
+            bitrate_kbps: 50_000,
+            width: 3_840,
+            height: 2_160,
+            fps: 120,
+            play_audio_local: false,
+            supported_codecs: 0,
+            hdr: true,
+        };
+
+        apply_absolute_stream_limits(&mut settings);
+
+        assert_eq!(settings.bitrate_kbps, 50_000);
+        assert_eq!(settings.width, 3_840);
+        assert_eq!(settings.height, 2_160);
+        assert_eq!(settings.fps, 120);
+    }
 }

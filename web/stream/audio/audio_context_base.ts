@@ -50,6 +50,10 @@ export abstract class AudioContextBasePipe implements NodeAudioPlayer {
     }
 
     onUserInteraction(): void {
+        // Browsers commonly create AudioContext in a suspended state until a
+        // trusted user gesture. Resume it here for every AudioContext pipeline.
+        void this.audioContext?.resume()
+
         if (this.base && "onUserInteraction" in this.base && typeof this.base.onUserInteraction == "function") {
             return this.base.onUserInteraction(...arguments)
         }
@@ -57,15 +61,34 @@ export abstract class AudioContextBasePipe implements NodeAudioPlayer {
 
     abstract setSource(source: AudioNode): void
 
+    // -- Output access for the desktop audio controls (state + user-gesture recovery)
+    getAudioContextIfReady(): AudioContext | null {
+        return this.audioContext
+    }
+    getOutputState() {
+        if (!this.audioContext) {
+            return null
+        }
+        return { kind: "context" as const, state: String(this.audioContext.state) }
+    }
+    async recoverOutput(): Promise<void> {
+        if (this.audioContext && this.audioContext.state !== "running" && this.audioContext.state !== "closed") {
+            await this.audioContext.resume()
+        }
+    }
+    getSinkTarget(): { setSinkId?: (id: string) => Promise<void> } | null {
+        return this.audioContext as unknown as { setSinkId?: (id: string) => Promise<void> } | null
+    }
+
     async reportStats(statsObject: Record<string, StatValue>): Promise<void> {
         // Both values are in secs -> we convert into ms
         if (this.audioContext?.baseLatency) {
-            statsObject.audioContextBaseLatencyMs = this.audioContext.baseLatency * 100
+            statsObject.audioContextBaseLatencyMs = this.audioContext.baseLatency * 1000
         } else {
             statsObject.audioContextBaseLatencyMs = "null"
         }
         if (this.audioContext?.outputLatency) {
-            statsObject.audioContextOutputLatencyMs = this.audioContext.outputLatency * 100
+            statsObject.audioContextOutputLatencyMs = this.audioContext.outputLatency * 1000
         } else {
             statsObject.audioContextOutputLatencyMs = "null"
         }

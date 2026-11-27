@@ -24,7 +24,8 @@ use crate::app::{
     password::StoragePassword,
     role::{Role, RoleId},
     storage::{
-        StorageHostAdd, StorageHostCache, StorageQueryHosts, StorageUser, StorageUserModify,
+        CredentialPin, StorageHostAdd, StorageHostCache, StorageQueryHosts, StorageUser,
+        StorageUserModify,
     },
 };
 
@@ -150,21 +151,26 @@ impl User {
 
         app.storage.modify_user(self.id, modify).await?;
 
+        // MW-17: a password/role change must be on disk before we report success.
+        app.storage.persist().await?;
+
         Ok(())
     }
     pub async fn delete(self, _: &Admin) -> Result<(), AppError> {
         let app = self.app.access()?;
 
         app.storage.remove_user(self.id).await?;
+        app.storage.persist().await?;
 
         Ok(())
     }
 
     pub async fn authenticate(mut self, auth: &UserAuth) -> Result<AuthenticatedUser, AppError> {
         match auth {
-            UserAuth::None if self.is_default_user().await? => {
-                Ok(AuthenticatedUser { inner: self })
-            }
+            UserAuth::None if self.is_default_user().await? => Ok(AuthenticatedUser {
+                inner: self,
+                pin: None,
+            }),
             UserAuth::UserPassword { username, password } => {
                 let storage = self.storage_user().await?;
 
@@ -172,19 +178,88 @@ impl User {
                     return Err(AppError::Unauthorized);
                 }
 
-                if let Some(storage_password) = storage.password.as_ref()
-                    && storage_password.verify(password)?
-                {
-                    let needs_rehash = storage_password.needs_rehash();
-                    let mut authenticated = AuthenticatedUser { inner: self };
-                    if needs_rehash {
-                        let rehashed = StoragePassword::new(password)?;
-                        authenticated.set_password(rehashed).await?;
-                    }
-                    Ok(authenticated)
-                } else {
-                    Err(AppError::CredentialsWrong)
+                // MW-23: PBKDF2 costs tens of milliseconds of CPU at the current
+                // iteration count. It must not run on the reactor worker, and it must
+                // not be possible to start more of them at once than the bounded pool
+                // allows. The stored hash format and the accept/reject answer are
+                // unchanged; the legacy rehash is computed in the same blocking task.
+                let Some(storage_password) = storage.password.as_ref() else {
+                    return Err(AppError::CredentialsWrong);
+                };
+
+                let app = self.app.access()?;
+
+                // AR-01: capture the identity incarnation the snapshot was read in
+                // *before* releasing the reactor for the PBKDF2 wait, so every later
+                // step can prove it still describes the same generation and the same
+                // identity snapshot.
+                let observed_epoch = app.storage.identity_epoch();
+                let observed_version = storage.credential_version;
+
+                // Test-only: let an interleaving regression place its rotation
+                // exactly between "snapshot read" and "credential checked". No-op in
+                // production (compiled out) and when no test has armed the gate.
+                #[cfg(test)]
+                app.credential_check_gate.arrive(username).await;
+
+                let verification = app
+                    .password_checks
+                    .verify(storage_password.clone(), password.clone())
+                    .await?;
+
+                if !verification.verified {
+                    return Err(AppError::CredentialsWrong);
                 }
+
+                // AR-01: the check above ran off-reactor, so an entire password
+                // rotation, role change, deletion or restore can have landed since
+                // this snapshot was read. Re-read the account and require that the
+                // credential we just accepted is still the current one. Without
+                // this, a verification that started before a rotation would convert
+                // into a brand new valid session after it.
+                //
+                // The generation is the authority for "is this the same credential
+                // set as when the password was checked"; a *transparent* rehash
+                // deliberately keeps it (see `Storage::rehash_password`), so it
+                // cannot cause a spurious rejection of a concurrent correct login.
+                // A password that was removed out of band is refused explicitly.
+                let current = app.storage.get_user(self.id).await?;
+                let current_epoch = app.storage.identity_epoch();
+                if current.credential_version != observed_version
+                    || current_epoch != observed_epoch
+                    || current.password.is_none()
+                {
+                    return Err(AppError::CredentialsWrong);
+                }
+
+                let user_id = self.id;
+                let mut authenticated = AuthenticatedUser {
+                    inner: self,
+                    // Pin both the generation and the identity incarnation the
+                    // credential was actually verified against, so `new_session`
+                    // cannot launder a stale verification into a usable token either.
+                    pin: Some(CredentialPin::new(observed_version, observed_epoch)),
+                };
+
+                if let Some(rehashed) = verification.rehash {
+                    // AR-04: a transparent upgrade is a compare-and-swap on the
+                    // generation that was verified, and it does not revoke sessions.
+                    // If a rotation raced this login the CAS fails and the login is
+                    // refused, so a stale rehash can never overwrite the new
+                    // password.
+                    match app
+                        .storage
+                        .rehash_password(user_id, observed_version, rehashed)
+                        .await
+                    {
+                        Ok(()) => authenticated.cache_storage = None,
+                        Err(AppError::CredentialsWrong) => {
+                            return Err(AppError::CredentialsWrong);
+                        }
+                        Err(err) => return Err(err),
+                    }
+                }
+                Ok(authenticated)
             }
             UserAuth::Session(session) => {
                 let app = self.app.access()?;
@@ -195,9 +270,12 @@ impl User {
                     return Err(AppError::SessionTokenNotFound);
                 }
 
+                let pin = user.as_ref().map(|user| {
+                    CredentialPin::new(user.credential_version, app.storage.identity_epoch())
+                });
                 self.cache_storage = self.cache_storage.or(user.map(Arc::new));
 
-                Ok(AuthenticatedUser { inner: self })
+                Ok(AuthenticatedUser { inner: self, pin })
             }
             UserAuth::ForwardedHeaders { username } => {
                 let app = self.app.access()?;
@@ -208,7 +286,10 @@ impl User {
 
                 let storage = self.storage_user().await?;
                 if storage.name.as_str() == username.as_str() {
-                    Ok(AuthenticatedUser { inner: self })
+                    Ok(AuthenticatedUser {
+                        inner: self,
+                        pin: None,
+                    })
                 } else {
                     Err(AppError::Forbidden)
                 }
@@ -221,6 +302,12 @@ impl User {
 #[derive(Clone)]
 pub struct AuthenticatedUser {
     pub(super) inner: User,
+    /// The credential generation and identity epoch this request was authenticated
+    /// against (AR-01).
+    ///
+    /// `None` means the authentication did not depend on a password/hash snapshot
+    /// (default user, trusted forwarded header), so there is nothing to pin.
+    pub(super) pin: Option<CredentialPin>,
 }
 
 impl Deref for AuthenticatedUser {
@@ -251,10 +338,16 @@ impl AuthenticatedUser {
                 self.id,
                 StorageUserModify {
                     password: Some(Some(password)),
+                    // A user-requested password change ends the account's other
+                    // sessions so a stolen cookie cannot outlive the rotation.
+                    revoke_sessions: true,
                     ..Default::default()
                 },
             )
             .await?;
+
+        // The password rotation must be durable before it is acknowledged.
+        app.storage.persist().await?;
 
         Ok(())
     }
@@ -262,9 +355,14 @@ impl AuthenticatedUser {
     pub async fn new_session(&self, expiration: Duration) -> Result<SessionToken, AppError> {
         let app = self.app.access()?;
 
+        // AR-01: when this handle came from a credential check, the token may only
+        // be minted while the account is still at the generation that was verified
+        // *and* the store is still the identity incarnation that verification
+        // happened in. The storage performs every check and the insert as one
+        // transition.
         let token = app
             .storage
-            .create_session_token(self.id, expiration)
+            .create_session_token_pinned(self.id, expiration, self.pin)
             .await?;
 
         Ok(token)

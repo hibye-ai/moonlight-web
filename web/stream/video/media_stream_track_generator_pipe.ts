@@ -1,6 +1,8 @@
 import { globalObject } from "../../util.js";
 import { Pipe, PipeInfo } from "../pipeline/index.js";
 import { addPipePassthrough } from "../pipeline/pipes.js";
+import { BoundedTrackWriter } from "../pipeline/bounded_track_writer.js";
+import { StatValue } from "../stats.js";
 import { allVideoCodecs } from "../video.js";
 import { FrameVideoRenderer, TrackVideoRenderer } from "./index.js";
 
@@ -23,6 +25,7 @@ export class VideoMediaStreamTrackGeneratorPipe implements FrameVideoRenderer {
 
     private trackGenerator: MediaStreamTrackGenerator
     private writer: WritableStreamDefaultWriter<VideoFrame>
+    private output: BoundedTrackWriter<VideoFrame>
 
     constructor(base: TrackVideoRenderer) {
         this.implementationName = `video_media_stream_track_generator -> ${base.implementationName}`
@@ -30,6 +33,7 @@ export class VideoMediaStreamTrackGeneratorPipe implements FrameVideoRenderer {
 
         this.trackGenerator = new MediaStreamTrackGenerator({ kind: "video" })
         this.writer = this.trackGenerator.writable.getWriter()
+        this.output = new BoundedTrackWriter(this.writer, "video")
 
         addPipePassthrough(this)
     }
@@ -42,7 +46,19 @@ export class VideoMediaStreamTrackGeneratorPipe implements FrameVideoRenderer {
 
             this.base.setTrack(this.trackGenerator)
         }
-        this.writer.write(frame)
+        this.output.submit(frame)
+    }
+
+    async reportStats(stats: Record<string, StatValue>): Promise<void> {
+        await this.base.reportStats?.(stats)
+        this.output.reportStats(stats, "videoTrack")
+    }
+
+    cleanup() {
+        this.output.close()
+        this.trackGenerator.stop()
+        const base = this.base as typeof this.base & { cleanup?(): void }
+        base.cleanup?.()
     }
 
     getBase(): Pipe | null {

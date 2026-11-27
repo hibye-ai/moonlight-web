@@ -8,6 +8,9 @@ const trueDefaultSettings: Settings =
     // possible values: "left", "right", "up", "down"
     "sidebarEdge": "left",
     "bitrate": 10000,
+    // Moonlight cannot change bitrate while a session is running. When enabled,
+    // recent connection quality only adjusts the bitrate used on the next start.
+    "adaptiveBitrate": true,
     "fps": 60,
     "videoFrameQueueSize": 3,
     // possible values: "720p", "1080p", "1440p", "4k", "native", "custom"
@@ -25,6 +28,13 @@ const trueDefaultSettings: Settings =
     "canvasVsync": false,
     "playAudioLocal": false,
     "audioSampleQueueSize": 20,
+    // WebRTC audio receiver jitter policy.
+    // "lowLatency": jitterBufferTarget/playoutDelayHint = 0.
+    // "auto": leave the receiver alone and let the browser size its buffer.
+    // "custom": use audioJitterTargetMs as the target.
+    // New profiles let the browser adapt to jitter. Saved explicit choices are preserved.
+    "audioJitterPolicy": "auto",
+    "audioJitterTargetMs": 40,
     // possible values: "highres", "normal"
     "mouseScrollMode": "highres",
     // possible values: "relative", "follow", "pointAndDrag"
@@ -40,7 +50,8 @@ const trueDefaultSettings: Settings =
     },
     // possible values: "auto", "webrtc", "websocket"
     "dataTransport": "auto",
-    "language": "en",
+    "language": "ko-KR",
+    "theme": "dark",
     "enterFullscreenOnStreamStart": false,
     "toggleFullscreenWithKeybind": false,
     // possible values: "standard", "old"

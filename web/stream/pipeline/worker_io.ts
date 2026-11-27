@@ -145,11 +145,11 @@ export class WorkerOffscreenCanvasSendPipe extends WorkerSenderPipe implements C
 
     implementationName: string = "offscreen_canvas_send"
 
-    constructor(base: WorkerPipe, logger?: Logger) {
+    constructor(base: WorkerPipe, logger?: Logger, options?: unknown) {
         super(base, logger)
 
         this.renderer = new BaseCanvasVideoRenderer("offscreen_canvas", {
-            drawOnSubmit: true
+            ...(options as object ?? {})
         })
 
         addPipePassthrough(this)

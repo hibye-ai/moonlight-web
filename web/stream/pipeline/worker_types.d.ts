@@ -1,10 +1,12 @@
 import { LogMessageInfo } from "../log.js"
 import { VideoDecodeUnit, VideoRendererSetup } from "../video/index.js"
 import { PipeInfo, Pipeline } from "./index.js"
+import { StatValue } from "../stats.js"
 
 export type ToWorkerMessage =
     { checkSupport: Pipeline } |
-    { createPipeline: Pipeline } |
+    { createPipeline: Pipeline, rendererOptions?: unknown } |
+    { inspect: true } |
     { input: WorkerMessage }
 
 export type WorkerMessage =
@@ -21,5 +23,7 @@ export type WorkerMessage =
 
 export type ToMainMessage =
     { checkSupport: PipeInfo } |
+    { videoAccepted: true } |
+    { inspection: { stats: Record<string, StatValue>, requestIdr: boolean } } |
     { log: string, info: LogMessageInfo } |
     { output: WorkerMessage }

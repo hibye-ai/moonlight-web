@@ -1,6 +1,7 @@
 use std::{
+    collections::HashMap,
     fmt::Display,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
     num::ParseIntError,
     str::FromStr,
     time::Duration,
@@ -15,6 +16,9 @@ use crate::api_bindings::RtcIceServer;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Private, server-managed host clipboard bridges. Never sent to browsers.
+    #[serde(default)]
+    pub clipboard_bridges: HashMap<u32, ClipboardBridgeConfig>,
     #[serde(default)]
     pub data_storage: StorageConfig,
     #[serde(default)]
@@ -36,6 +40,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            clipboard_bridges: Default::default(),
             data_storage: Default::default(),
             streamer_path: default_streamer_path(),
             web_server: Default::default(),
@@ -45,6 +50,21 @@ impl Default for Config {
             #[allow(deprecated)]
             default_settings: Default::default(),
         }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ClipboardBridgeConfig {
+    pub endpoint: SocketAddr,
+    pub token: String,
+}
+
+impl std::fmt::Debug for ClipboardBridgeConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClipboardBridgeConfig")
+            .field("endpoint", &self.endpoint)
+            .field("token", &"[redacted]")
+            .finish()
     }
 }
 
@@ -248,6 +268,14 @@ pub struct WebServerConfig {
     pub url_path_prefix: String,
     #[serde(default = "default_session_cookie_secure")]
     pub session_cookie_secure: bool,
+    /// Explicit, opt-in development exception for a plain-HTTP deployment.
+    ///
+    /// `session_cookie_secure` is an HTTPS-only policy: when it is set, a login over
+    /// a cleartext connection is refused. Setting this together with it re-enables
+    /// cleartext login (and issues a cookie without `Secure`) for a local-only
+    /// development setup. Defaults to `false`.
+    #[serde(default)]
+    pub allow_insecure_http_login: bool,
     #[serde(default = "default_session_cookie_expiration")]
     pub session_cookie_expiration: Duration,
     pub first_login_create_admin: bool,
@@ -255,6 +283,22 @@ pub struct WebServerConfig {
     pub default_user_id: Option<u32>,
     pub default_role_id: Option<u32>,
     pub forwarded_header: Option<ForwardedHeaders>,
+    /// Peers whose `Forwarded` / `X-Forwarded-Proto` assertion is trusted for the
+    /// *transport* decision only (AR-07).
+    ///
+    /// This is deliberately separate from [`ForwardedHeaders`], which authenticates a
+    /// **user** from a header. Trusting a reverse proxy to report the external scheme
+    /// (so `session_cookie_secure` can be honoured behind TLS termination) must not
+    /// require turning on header-based user authentication — leave `forwarded_header`
+    /// unset and set only this list.
+    ///
+    /// Entries must be exact peer addresses; prefixes and wildcards are not accepted,
+    /// because a trust list that matches a range is not an exact peer allow-list.
+    /// Loopback is always trusted for this decision and needs no entry.
+    ///
+    /// Default empty: deny — no non-loopback peer may assert a scheme.
+    #[serde(default)]
+    pub trusted_forwarded_proto_ips: Vec<IpAddr>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -270,12 +314,14 @@ impl Default for WebServerConfig {
             certificate: None,
             url_path_prefix: "".to_string(),
             session_cookie_secure: default_session_cookie_secure(),
+            allow_insecure_http_login: false,
             session_cookie_expiration: default_session_cookie_expiration(),
             first_login_create_admin: true,
             first_login_assign_global_hosts: true,
             default_user_id: None,
             default_role_id: None,
             forwarded_header: None,
+            trusted_forwarded_proto_ips: Vec::new(),
         }
     }
 }
@@ -297,6 +343,9 @@ pub struct ForwardedHeaders {
     pub username_header: String,
     #[serde(default = "default_forwarded_headers_auto_create_user")]
     pub auto_create_missing_user: bool,
+    /// Only trust forwarded authentication headers from loopback or these peer IPs.
+    #[serde(default)]
+    pub trusted_proxy_ips: Vec<IpAddr>,
 }
 
 impl Default for ForwardedHeaders {
@@ -304,6 +353,7 @@ impl Default for ForwardedHeaders {
         Self {
             username_header: "X-Forwarded-User".to_string(),
             auto_create_missing_user: default_forwarded_headers_auto_create_user(),
+            trusted_proxy_ips: Vec::new(),
         }
     }
 }

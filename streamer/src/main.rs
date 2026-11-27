@@ -49,7 +49,7 @@ use tokio::{
     spawn,
     sync::{Mutex, Notify, RwLock},
     task::spawn_blocking,
-    time::sleep,
+    time::{sleep, timeout},
 };
 use tracing::{Level, level_filters::LevelFilter, span};
 use tracing::{debug, error, info, trace, warn};
@@ -84,7 +84,7 @@ async fn main() {
     let default_panic = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
         default_panic(info);
-        exit(0);
+        exit(101);
     }));
 
     // At this point we're authenticated
@@ -234,8 +234,8 @@ async fn main() {
     // Wait for termination
     connection.terminate.notified().await;
 
-    // Wait for everything to shutdown (e.g. Moonlight Client, IPC messages)
-    sleep(Duration::from_secs(10)).await;
+    // Give IPC/log writers a brief chance to flush; stop() has already closed the transport.
+    sleep(Duration::from_millis(200)).await;
 
     info!("Terminating Self");
     // Exit streamer
@@ -658,13 +658,14 @@ impl StreamConnection {
                     TransportType::WebSocket if self.permissions.allow_transport_websockets => {
                         info!("Trying Web Socket transport");
 
-                        let (sender, events) = match web_socket::new().await {
-                            Ok(value) => value,
-                            Err(err) => {
-                                error!("Failed to start web socket transport: {err}");
-                                return;
-                            }
-                        };
+                        let (sender, events) =
+                            match web_socket::new(self.video_frame_queue_size).await {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    error!("Failed to start web socket transport: {err}");
+                                    return;
+                                }
+                            };
                         self.set_transport(Box::new(sender), Box::new(events)).await;
                     }
                     transport => {
@@ -696,9 +697,18 @@ impl StreamConnection {
         {
             let mut stream = self.stream.write().await;
             if let Some(stream) = stream.take() {
-                spawn_blocking(move || {
-                    stream.stop();
-                });
+                match timeout(
+                    Duration::from_secs(2),
+                    spawn_blocking(move || stream.stop()),
+                )
+                .await
+                {
+                    Ok(Ok(())) => debug!("[Stream]: Moonlight stream stopped cleanly"),
+                    Ok(Err(err)) => warn!("[Stream]: Moonlight stop task failed: {err}"),
+                    Err(_) => warn!(
+                        "[Stream]: Moonlight stop exceeded 2 seconds; process shutdown will continue"
+                    ),
+                }
             }
         }
         info!("Starting Moonlight stream with settings: {settings:?}");

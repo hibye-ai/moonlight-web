@@ -5,6 +5,7 @@ import { buildPipeline, getPipe, Pipe, PipeInfo, pipeName } from "./index.js"
 import { WorkerOffscreenCanvasSendPipe } from "./worker_io.js"
 import { WorkerReceiver } from "./worker_pipe.js"
 import { ToMainMessage, ToWorkerMessage, WorkerMessage } from "./worker_types.js"
+import { StatValue } from "../stats.js"
 
 // Configure logger
 const logger = new Logger()
@@ -37,6 +38,9 @@ class WorkerMessageSender implements WorkerReceiver {
 
         postMessage(message)
     }
+
+    async reportStats(_stats: Record<string, StatValue>): Promise<void> { }
+    pollRequestIdr(): boolean { return false }
 
     getBase(): Pipe | null {
         return null
@@ -83,7 +87,7 @@ async function onMessage(message: ToWorkerMessage) {
 
         const pipeline = message.createPipeline
 
-        const newPipeline = buildPipeline(WorkerMessageSender, pipeline, logger)
+        const newPipeline = buildPipeline(WorkerMessageSender, pipeline, logger, message.rendererOptions)
         if (newPipeline && "onWorkerMessage" in newPipeline && typeof newPipeline.onWorkerMessage == "function") {
             currentPipeline = newPipeline as WorkerReceiver
         } else {
@@ -101,6 +105,12 @@ async function onMessage(message: ToWorkerMessage) {
             canvasPipe = base
             logger.debug("Found WorkerOffscreenCanvasSendPipe in worker pipeline")
         }
+    } else if ("inspect" in message) {
+        const stats: Record<string, StatValue> = {}
+        await currentPipeline?.reportStats?.(stats)
+        const pipeline = currentPipeline as (WorkerReceiver & { pollRequestIdr?(): boolean }) | null
+        const response: ToMainMessage = { inspection: { stats, requestIdr: pipeline?.pollRequestIdr?.() ?? false } }
+        postMessage(response)
     } else if ("input" in message) {
         if (pipelineErrored) {
             return
@@ -118,9 +128,13 @@ async function onMessage(message: ToWorkerMessage) {
         } else {
             if (currentPipeline) {
                 currentPipeline.onWorkerMessage(message.input)
+                if ("videoData" in message.input) {
+                    const response: ToMainMessage = { videoAccepted: true }
+                    postMessage(response)
+                }
             } else {
                 pipelineErrored = true
-                logger.debug(`Failed to submit worker pipe input because the worker wasn't assigned a pipeline! Message: ${JSON.stringify(message)}`)
+                logger.debug("Failed to submit worker input: no pipeline")
             }
         }
 

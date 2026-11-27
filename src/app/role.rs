@@ -87,6 +87,8 @@ impl Role {
         let app = self.app.access()?;
 
         app.storage.modify_role(self.id, modify).await?;
+        // MW-17: role permissions are security-relevant, so persist before success.
+        app.storage.persist().await?;
 
         Ok(())
     }
@@ -95,6 +97,8 @@ impl Role {
         let app = self.app.access()?;
 
         app.storage.remove_role(self.id).await?;
+        // remove_role commits the complete cascade durably. A second fallible
+        // write here could report rejection after the deletion already committed.
 
         Ok(())
     }

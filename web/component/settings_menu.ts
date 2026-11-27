@@ -1,6 +1,7 @@
 import { ControllerConfig } from "../stream/gamepad.js";
 import { MouseMode, MouseScrollMode, TouchMode } from "../stream/input.js";
 import { PageStyle } from "../styles/index.js";
+import { applyTheme, ThemeMode } from "../theme.js";
 import { getLanguageOptions, getTranslations, Language, normalizeLanguage } from "../i18n.js";
 import { Component, ComponentEvent } from "./index.js";
 import { InputComponent, SelectComponent } from "./input.js";
@@ -9,6 +10,7 @@ import { SidebarEdge } from "./sidebar/index.js";
 export type Settings = {
     sidebarEdge: SidebarEdge,
     bitrate: number
+    adaptiveBitrate: boolean
     videoFrameQueueSize: number
     videoSize: "720p" | "1080p" | "1440p" | "4k" | "native" | "custom"
     videoSizeCustom: {
@@ -22,6 +24,11 @@ export type Settings = {
     canvasVsync: boolean
     playAudioLocal: boolean
     audioSampleQueueSize: number
+    /// WebRTC audio receiver jitter policy. New/missing settings use "auto";
+    /// explicit "lowLatency" and "custom" choices are retained.
+    audioJitterPolicy: "lowLatency" | "auto" | "custom"
+    /// Target jitter buffer in milliseconds; only read when audioJitterPolicy is "custom".
+    audioJitterTargetMs: number
     mouseScrollMode: MouseScrollMode
     mouseMode: MouseMode
     touchMode: TouchMode
@@ -29,6 +36,7 @@ export type Settings = {
     controllerConfig: ControllerConfig
     dataTransport: TransportType
     language: Language
+    theme: ThemeMode
     enterFullscreenOnStreamStart: boolean
     toggleFullscreenWithKeybind: boolean
     pageStyle: PageStyle
@@ -40,6 +48,7 @@ export type StreamCodec = "h264" | "auto" | "h265" | "av1"
 export type TransportType = "auto" | "webrtc" | "websocket"
 
 import DEFAULT_SETTINGS from "../default_settings.js"
+import { clampTarget } from "../stream/transport/audio_policy.js"
 import { StreamPermissions } from "../api_bindings.js";
 
 /// You should use the role default settings instead!
@@ -108,7 +117,10 @@ export function setLocalStreamSettings(settings?: Settings) {
 
 export type StreamSettingsChangeListener = (event: ComponentEvent<StreamSettingsComponent>) => void
 
-function makeSettingsValid(permissions: StreamPermissions, settings: Settings) {
+function makeSettingsValid(permissions: StreamPermissions, settings: Settings | null | undefined) {
+    if (settings == null) {
+        return
+    }
     if (permissions.maximum_bitrate_kbps != null && permissions.maximum_bitrate_kbps < settings.bitrate) {
         settings.bitrate = permissions.maximum_bitrate_kbps
     }
@@ -150,6 +162,7 @@ export class StreamSettingsComponent implements Component {
 
     private streamHeader: HTMLHeadingElement = document.createElement("h3")
     private bitrate: InputComponent
+    private adaptiveBitrate: InputComponent
     private fps: InputComponent
     private videoCodec: SelectComponent
     private forceVideoElementRenderer: InputComponent
@@ -166,6 +179,9 @@ export class StreamSettingsComponent implements Component {
     private audioHeader: HTMLHeadingElement = document.createElement("h3")
     private playAudioLocal: InputComponent
     private audioSampleQueueSize: InputComponent
+    private audioJitterPolicy: SelectComponent
+    /// Persisted custom target (ms). No input in this menu yet; carried through on save.
+    private audioJitterTargetMs: number = DEFAULT_SETTINGS.audioJitterTargetMs
 
     private mouseHeader: HTMLHeadingElement = document.createElement("h3")
     private mouseScrollMode: SelectComponent
@@ -181,14 +197,14 @@ export class StreamSettingsComponent implements Component {
     private otherHeader: HTMLHeadingElement = document.createElement("h3")
     private dataTransport: SelectComponent
     private language: SelectComponent
+    private theme: SelectComponent
     private enterFullscreenOnStreamStart: InputComponent
     private toggleFullscreenWithKeybind: InputComponent
 
-    private pageStyle: SelectComponent
 
     private useSelectElementPolyfill: InputComponent
 
-    constructor(permissions: StreamPermissions, settings: Settings) {
+    constructor(permissions: StreamPermissions, settings: Settings | null | undefined) {
         // Sometimes the normal settings object doesn't have some values, because they change between versions.
         // Use those as fallback
         const defaultSettings_ = globalDefaultSettings()
@@ -237,6 +253,12 @@ export class StreamSettingsComponent implements Component {
         })
         this.bitrate.addChangeListener(this.onSettingsChange.bind(this))
         this.bitrate.mount(this.divElement)
+
+        this.adaptiveBitrate = new InputComponent("adaptiveBitrate", "checkbox", i.adaptiveBitrate, {
+            checked: settings?.adaptiveBitrate ?? defaultSettings_.adaptiveBitrate
+        })
+        this.adaptiveBitrate.addChangeListener(this.onSettingsChange.bind(this))
+        this.adaptiveBitrate.mount(this.divElement)
 
         // Fps
         this.fps = new InputComponent("fps", "number", i.fps, {
@@ -366,6 +388,20 @@ export class StreamSettingsComponent implements Component {
         this.audioSampleQueueSize.addChangeListener(this.onSettingsChange.bind(this))
         this.audioSampleQueueSize.mount(this.divElement)
 
+        // Audio Jitter Policy (WebRTC). Diagnostic switch for a receiver A/B: changing it
+        // does not by itself fix anything, it only makes the comparison possible.
+        this.audioJitterPolicy = new SelectComponent("audioJitterPolicy", [
+            { value: "lowLatency", name: i.audioJitterLowLatency },
+            { value: "auto", name: i.audioJitterAuto },
+            { value: "custom", name: i.audioJitterCustom },
+        ], {
+            displayName: i.audioJitterPolicy,
+            preSelectedOption: settings?.audioJitterPolicy ?? defaultSettings_.audioJitterPolicy,
+        })
+        this.audioJitterTargetMs = clampTarget(settings?.audioJitterTargetMs ?? defaultSettings_.audioJitterTargetMs)
+        this.audioJitterPolicy.addChangeListener(this.onSettingsChange.bind(this))
+        this.audioJitterPolicy.mount(this.divElement)
+
         // Mouse
         this.mouseHeader.innerText = i.mouse
         this.divElement.appendChild(this.mouseHeader)
@@ -490,6 +526,17 @@ export class StreamSettingsComponent implements Component {
         this.language.addChangeListener(this.onSettingsChange.bind(this))
         this.language.mount(this.divElement)
 
+        this.theme = new SelectComponent("theme", [
+            { value: "system", name: i.themeSystem },
+            { value: "dark", name: i.themeDark },
+            { value: "light", name: i.themeLight },
+        ], {
+            displayName: i.theme,
+            preSelectedOption: settings?.theme ?? defaultSettings_.theme
+        })
+        this.theme.addChangeListener(this.onSettingsChange.bind(this))
+        this.theme.mount(this.divElement)
+
         this.dataTransport = new SelectComponent("transport", allowedDataTransport, {
             displayName: i.dataTransport,
             preSelectedOption: settings?.dataTransport ?? defaultSettings_.dataTransport
@@ -510,17 +557,6 @@ export class StreamSettingsComponent implements Component {
         this.toggleFullscreenWithKeybind.addChangeListener(this.onSettingsChange.bind(this))
         this.toggleFullscreenWithKeybind.mount(this.divElement)
 
-        // Page Style
-        this.pageStyle = new SelectComponent("pageStyle", [
-            { value: "standard", name: "Standard" },
-            { value: "moonlight", name: "Moonlight" },
-        ], {
-            displayName: i.style,
-            preSelectedOption: settings?.pageStyle ?? defaultSettings_.pageStyle
-        })
-        this.pageStyle.addChangeListener(this.onSettingsChange.bind(this))
-        this.pageStyle.mount(this.divElement)
-
         // Custom Select Element
         this.useSelectElementPolyfill = new InputComponent("useSelectElementPolyfill", "checkbox", i.useCustomDropdown, {
             checked: settings?.useSelectElementPolyfill ?? defaultSettings_.useSelectElementPolyfill
@@ -528,7 +564,48 @@ export class StreamSettingsComponent implements Component {
         this.useSelectElementPolyfill.addChangeListener(this.onSettingsChange.bind(this))
         this.useSelectElementPolyfill.mount(this.divElement)
 
+        this.organizeSections()
         this.onSettingsChange()
+    }
+
+    private organizeSections() {
+        const children = Array.from(this.divElement.children)
+        const nav = document.createElement("nav")
+        nav.classList.add("settings-nav")
+        const sections = document.createElement("div")
+        sections.classList.add("settings-sections")
+        let body: HTMLElement | null = null
+
+        const openSection = (heading: HTMLElement | null) => {
+            const section = document.createElement("section")
+            section.classList.add("settings-section")
+            body = document.createElement("div")
+            body.classList.add("settings-section-body")
+            if (heading) {
+                section.appendChild(heading)
+                const link = document.createElement("button")
+                link.type = "button"
+                link.classList.add("settings-nav-item")
+                link.innerText = heading.innerText
+                link.addEventListener("click", () => section.scrollIntoView({ behavior: "smooth", block: "start" }))
+                nav.appendChild(link)
+            }
+            section.appendChild(body)
+            sections.appendChild(section)
+        }
+
+        for (const child of children) {
+            if (child.tagName === "H3") {
+                openSection(child as HTMLElement)
+            } else {
+                if (!body) {
+                    openSection(null)
+                }
+                body!.appendChild(child)
+            }
+        }
+
+        this.divElement.replaceChildren(nav, sections)
     }
 
     private onSettingsChange() {
@@ -555,6 +632,7 @@ export class StreamSettingsComponent implements Component {
 
         settings.sidebarEdge = this.sidebarEdge.getValue() as any
         settings.bitrate = parseInt(this.bitrate.getValue())
+        settings.adaptiveBitrate = this.adaptiveBitrate.isChecked()
         settings.fps = parseInt(this.fps.getValue())
         settings.videoSize = this.videoSize.getValue() as any
         settings.videoSizeCustom = {
@@ -569,6 +647,10 @@ export class StreamSettingsComponent implements Component {
 
         settings.playAudioLocal = this.playAudioLocal.isChecked()
         settings.audioSampleQueueSize = parseInt(this.audioSampleQueueSize.getValue())
+        settings.audioJitterPolicy = this.audioJitterPolicy.getValue() as Settings["audioJitterPolicy"]
+        // The target is only meaningful for "custom" and has no input in this menu yet, so
+        // the value loaded with the settings must be carried through instead of reset.
+        settings.audioJitterTargetMs = this.audioJitterTargetMs
 
         settings.mouseScrollMode = this.mouseScrollMode.getValue() as any
         settings.mouseMode = this.mouseMode.getValue() as MouseMode
@@ -585,11 +667,13 @@ export class StreamSettingsComponent implements Component {
 
         settings.dataTransport = this.dataTransport.getValue() as any
         settings.language = this.language.getValue() as Language
+        settings.theme = this.theme.getValue() as ThemeMode
+        applyTheme(settings.theme)
 
         settings.enterFullscreenOnStreamStart = this.enterFullscreenOnStreamStart.isChecked()
         settings.toggleFullscreenWithKeybind = this.toggleFullscreenWithKeybind.isChecked()
 
-        settings.pageStyle = this.pageStyle.getValue() as any
+        settings.pageStyle = "standard"
 
         settings.hdr = this.hdr.isChecked()
 

@@ -10,15 +10,59 @@ use actix_web::{
 };
 use common::api_bindings::PostLoginRequest;
 use futures::future::{Ready, ready};
-use std::{pin::Pin, time::Duration};
+use log::warn;
+use std::{net::IpAddr, pin::Pin, time::Duration};
 
 use crate::app::{
     App, AppError,
     auth::{SessionToken, UserAuth},
+    password::AdmissionRefusal,
     user::{Admin, AuthenticatedUser},
 };
 
+mod transport;
+
 pub const COOKIE_SESSION_TOKEN_NAME: &str = "mlSession";
+
+/// How long a refused client is told to wait before trying again.
+const LOGIN_RETRY_AFTER_SECONDS: u64 = 60;
+
+/// The real TCP peer, which is the only client identity a request cannot choose.
+///
+/// A forwarding header is not an acceptable substitute: `X-Forwarded-For` is written
+/// by whoever opened the socket, so honouring it here would let an attacker mint a
+/// fresh failure bucket per guess. Trusting a proxy to assert the *transport* scheme
+/// or a username is likewise not the same as trusting it to name the client.
+fn login_peer_ip(req: &HttpRequest) -> Option<IpAddr> {
+    req.peer_addr().map(|addr| addr.ip())
+}
+
+/// The refusal for an attempt that was turned away before any password was checked.
+///
+/// `Retry-After` is set so a client knows the refusal is temporary; the in-flight
+/// refusal is distinguished (503) from a spent budget (429) because the former means
+/// "the server is busy right now", not "you are out of attempts".
+fn admission_refusal_response(refusal: AdmissionRefusal) -> HttpResponse {
+    match refusal {
+        AdmissionRefusal::InFlight => HttpResponse::ServiceUnavailable()
+            .append_header(("Retry-After", "1"))
+            .finish(),
+        AdmissionRefusal::Account | AdmissionRefusal::Client | AdmissionRefusal::Global => {
+            HttpResponse::TooManyRequests()
+                .append_header(("Retry-After", LOGIN_RETRY_AFTER_SECONDS.to_string()))
+                .finish()
+        }
+    }
+}
+
+fn forwarded_auth_peer_is_trusted(req: &HttpRequest, trusted_proxy_ips: &[IpAddr]) -> bool {
+    req.peer_addr()
+        .map(|addr| {
+            let ip = addr.ip();
+            ip.is_loopback() || trusted_proxy_ips.contains(&ip)
+        })
+        .unwrap_or(false)
+}
 
 impl FromRequest for UserAuth {
     type Error = AppError;
@@ -29,7 +73,7 @@ impl FromRequest for UserAuth {
         ready(extract_user_auth(req))
     }
 }
-fn extract_user_auth(req: &HttpRequest) -> Result<UserAuth, AppError> {
+pub(crate) fn extract_user_auth(req: &HttpRequest) -> Result<UserAuth, AppError> {
     let app = match req.app_data::<Data<App>>() {
         None => return Err(AppError::AppDestroyed),
         Some(value) => value,
@@ -38,6 +82,10 @@ fn extract_user_auth(req: &HttpRequest) -> Result<UserAuth, AppError> {
     if let Some(header_auth) = &app.config().web_server.forwarded_header
         && let Some(username) = req.headers().get(&header_auth.username_header)
     {
+        if !forwarded_auth_peer_is_trusted(req, &header_auth.trusted_proxy_ips) {
+            return Err(AppError::HeaderAuthDisabled);
+        }
+
         let Ok(username) = username.to_str() else {
             return Err(AppError::HeaderAuthMalformed);
         };
@@ -112,29 +160,71 @@ impl FromRequest for Admin {
 #[post("/login")]
 async fn login(
     app: Data<App>,
+    req: HttpRequest,
     Json(request): Json<PostLoginRequest>,
 ) -> Result<HttpResponse, Error> {
-    let user = if app.config().web_server.first_login_create_admin {
+    // MW-22: the transport policy is decided before anything else touches account state.
+    // A cleartext login on an HTTPS-only deployment is refused instead of receiving a
+    // plaintext session — and, crucially, before `try_add_first_login` could create the
+    // first admin. The `Secure` flag follows the same decision further down.
+    let Some(secure_cookie) = transport::session_cookie_policy(&req, &app.config().web_server)
+    else {
+        warn!("refusing login: transport policy requires a trusted TLS path");
+        return Ok(HttpResponse::UpgradeRequired()
+            .append_header(("Upgrade", "TLS/1.2, HTTP/1.1"))
+            .finish());
+    };
+
+    let username = request.name;
+    let password = request.password;
+    let peer_ip = login_peer_ip(&req);
+    // The submitted name is the account label for admission purposes. It is also what
+    // an unknown-username attempt is charged against, so probing a name is bounded even
+    // though no such account exists yet.
+    let account_label = username.clone();
+
+    // MW-23: admission is decided and the in-flight slot reserved in one atomic step,
+    // *before* any password is hashed. Checking a bound and later recording the outcome
+    // as two independent operations is exactly the gap a concurrent burst walks
+    // through, so the guard's lifetime covers the whole attempt.
+    let admission = app.login_admission().try_enter(&account_label, peer_ip);
+    let mut admission = match admission {
+        Ok(guard) => guard,
+        Err(refusal) => {
+            warn!("refusing login: admission refused ({refusal:?})");
+            return Ok(admission_refusal_response(refusal));
+        }
+    };
+
+    let user_result = if app.config().web_server.first_login_create_admin {
         match app
-            .try_add_first_login(request.name.clone(), request.password.clone())
+            .try_add_first_login(username.clone(), password.clone())
             .await
         {
-            Ok(user) => user,
+            Ok(user) => Ok(user),
             Err(AppError::FirstUserAlreadyExists) => {
-                app.user_by_auth(UserAuth::UserPassword {
-                    username: request.name,
-                    password: request.password,
-                })
-                .await?
+                app.user_by_auth(UserAuth::UserPassword { username, password })
+                    .await
             }
-            Err(err) => return Err(err.into()),
+            Err(err) => Err(err),
         }
     } else {
-        app.user_by_auth(UserAuth::UserPassword {
-            username: request.name,
-            password: request.password,
-        })
-        .await?
+        app.user_by_auth(UserAuth::UserPassword { username, password })
+            .await
+    };
+
+    let user = match user_result {
+        Ok(user) => {
+            // Settle this reservation without erasing other clients' or
+            // overlapping requests' failures, including for the same account.
+            admission.record_success();
+            user
+        }
+        Err(AppError::CredentialsWrong | AppError::UserNotFound) => {
+            admission.record_failure();
+            return Err(AppError::CredentialsWrong.into());
+        }
+        Err(err) => return Err(err.into()),
     };
 
     let session_expiration = app.config().web_server.session_cookie_expiration;
@@ -144,23 +234,34 @@ async fn login(
     let session_str = session.encode(&mut session_bytes);
 
     Ok(HttpResponse::Ok()
-        .cookie(build_cookie(&app, session_expiration, session_str))
+        .cookie(build_cookie(
+            &app,
+            session_expiration,
+            session_str,
+            secure_cookie,
+        ))
         .finish())
 }
 
 #[post("/logout")]
 async fn logout(app: Data<App>, auth: UserAuth, req: HttpRequest) -> Result<HttpResponse, Error> {
-    let session = match auth {
-        UserAuth::Session(session) => session,
-        _ => return Ok(HttpResponse::BadRequest().finish()),
-    };
-
-    app.delete_session(session).await?;
+    // Logout is intentionally idempotent. A configured default user has no
+    // session token to revoke, while cookie/session users do. In either case
+    // clear any stale session cookie and return success.
+    if let UserAuth::Session(session) = auth {
+        app.delete_session(session).await?;
+    }
 
     let mut response = HttpResponse::Ok().finish();
 
     if req.cookie(COOKIE_SESSION_TOKEN_NAME).is_some() {
-        response.add_removal_cookie(&build_cookie(&app, Duration::ZERO, ""))?;
+        // Removal must match the attributes the cookie may have been set with. When
+        // cleartext is refused there is nothing to clear over this transport, but the
+        // `Secure` variant is still emitted so a policy-enabled deployment clears the
+        // cookie a browser holds from an earlier TLS session.
+        let secure =
+            transport::session_cookie_policy(&req, &app.config().web_server).unwrap_or(true);
+        response.add_removal_cookie(&build_cookie(&app, Duration::ZERO, "", secure))?;
     }
 
     Ok(response)
@@ -178,25 +279,50 @@ pub async fn auth_middleware(
     if let Some(err) = response.response().error()
         && let Some(AppError::SessionTokenNotFound) = err.as_error::<AppError>()
     {
-        response
-            .response_mut()
-            .add_removal_cookie(&build_cookie(&app, Duration::ZERO, ""))?;
+        response.response_mut().add_removal_cookie(&build_cookie(
+            &app,
+            Duration::ZERO,
+            "",
+            true,
+        ))?;
     }
 
     Ok(response)
 }
 
-pub fn build_cookie<'a>(app: &'a App, expiration: Duration, session_str: &'a str) -> Cookie<'a> {
+pub fn build_cookie<'a>(
+    app: &'a App,
+    expiration: Duration,
+    session_str: &'a str,
+    secure: bool,
+) -> Cookie<'a> {
     Cookie::build(COOKIE_SESSION_TOKEN_NAME, session_str)
         .path(&app.config().web_server.url_path_prefix)
         .same_site(SameSite::Strict)
         .http_only(true) // not accessible via js
-        .secure(app.config().web_server.session_cookie_secure)
+        .secure(secure)
         .expires(Expiration::DateTime(OffsetDateTime::now_utc() + expiration))
         .finish()
 }
+
+#[cfg(test)]
+mod auth_tests;
+#[cfg(test)]
+mod mw23_tests;
 
 #[get("/authenticate")]
 async fn authenticate(_user: AuthenticatedUser) -> HttpResponse {
     HttpResponse::Ok().finish()
 }
+
+#[cfg(test)]
+mod astra_deployment_tests;
+
+#[cfg(test)]
+mod transport_trust_tests;
+
+#[cfg(test)]
+mod migration_artifact_tests;
+
+#[cfg(test)]
+mod session_issuance_tests;

@@ -22,13 +22,24 @@ export class HostList extends FetchListComponent<DetailedHost | UndetailedHost, 
         const hosts = await apiGetHosts(this.api)
 
         this.updateCache(hosts.response.hosts)
+        for (const host of this.list.get()) {
+            host.setLoading(true)
+        }
+        this.eventTarget.dispatchEvent(new Event("ml-hostschanged"))
 
-        let update
-        while (update = await hosts.next()) {
-            const host = this.getHost(update.host_id)
-            if (host) {
-                this.updateComponentData(host, update)
+        try {
+            let update
+            while (update = await hosts.next()) {
+                const host = this.getHost(update.host_id)
+                if (host) {
+                    this.updateComponentData(host, update)
+                }
             }
+        } finally {
+            for (const host of this.list.get()) {
+                host.setLoading(false)
+            }
+            this.eventTarget.dispatchEvent(new Event("ml-hostschanged"))
         }
     }
 
@@ -49,18 +60,27 @@ export class HostList extends FetchListComponent<DetailedHost | UndetailedHost, 
 
         newHost.addHostRemoveListener(this.removeHostListener.bind(this))
         newHost.addHostOpenListener(this.onHostOpenEvent.bind(this))
+        this.eventTarget.dispatchEvent(new Event("ml-hostschanged"))
     }
     public removeList(listIndex: number): void {
         const hostComponent = this.list.remove(listIndex)
 
         hostComponent?.addHostOpenListener(this.onHostOpenEvent.bind(this))
         hostComponent?.removeHostRemoveListener(this.removeHostListener.bind(this))
+        this.eventTarget.dispatchEvent(new Event("ml-hostschanged"))
     }
 
     private removeHostListener(event: ComponentEvent<Host>) {
         const listIndex = this.list.get().findIndex(component => component.getHostId() == event.component.getHostId())
 
         this.removeList(listIndex)
+    }
+
+    addHostsChangedListener(listener: () => void) {
+        this.eventTarget.addEventListener("ml-hostschanged", listener)
+    }
+    getHosts(): readonly Host[] {
+        return this.list.get()
     }
 
     getHost(hostId: number): Host | undefined {

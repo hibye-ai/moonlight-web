@@ -2,6 +2,8 @@ import { ComponentEvent } from "../index.js"
 import { getCurrentLanguage, getTranslations } from "../../i18n.js"
 import { InputComponent } from "../input.js"
 import { FormModal } from "./form.js"
+import { toggleStoredTheme } from "../../theme.js"
+import { icon } from "../icons.js"
 
 export type UserAuth = {
     name: string,
@@ -10,7 +12,10 @@ export type UserAuth = {
 
 export class ApiUserPasswordPrompt extends FormModal<UserAuth> {
 
-    private text: HTMLElement = document.createElement("h3")
+    private brand: HTMLDivElement = document.createElement("div")
+    private text: HTMLElement = document.createElement("h2")
+    private subtitle: HTMLElement = document.createElement("p")
+    private themeButton: HTMLButtonElement = document.createElement("button")
 
     private name: InputComponent
     private password: InputComponent
@@ -19,15 +24,35 @@ export class ApiUserPasswordPrompt extends FormModal<UserAuth> {
     constructor() {
         super()
         const i = getTranslations(getCurrentLanguage()).modal
+        const ui = getTranslations(getCurrentLanguage()).ui
 
+        this.setSubmitLabel(i.login)
+        this.brand.classList.add("login-brand")
+        this.brand.innerHTML = '<span class="brand-glyph" aria-hidden="true"></span><span class="brand-text"><strong>Moonlight</strong><small>Web Console</small></span>'
+        this.themeButton.type = "button"
+        this.themeButton.classList.add("icon-btn", "login-theme-toggle")
+        const syncThemeIcon = () => {
+            const light = document.documentElement.dataset.theme === "light"
+            this.themeButton.replaceChildren(icon(light ? "moon" : "sun"))
+            this.themeButton.title = ui.toggleTheme
+            this.themeButton.setAttribute("aria-label", ui.toggleTheme)
+        }
+        syncThemeIcon()
+        this.themeButton.addEventListener("click", () => { toggleStoredTheme(); syncThemeIcon() })
+        this.brand.appendChild(this.themeButton)
         this.text.innerText = i.login
+        this.text.classList.add("login-title")
+        this.subtitle.innerText = i.loginSubtitle
+        this.subtitle.classList.add("login-subtitle")
 
         this.name = new InputComponent("ml-api-name", "text", i.username, {
-            formRequired: true
+            formRequired: true,
+            autocomplete: "username"
         })
 
         this.password = new InputComponent("ml-api-password", "password", i.password, {
-            formRequired: true
+            formRequired: true,
+            autocomplete: "current-password"
         })
 
         this.passwordFile = new InputComponent("ml-api-password-file", "file", i.passwordAsFile, { accept: ".txt" })
@@ -85,9 +110,20 @@ export class ApiUserPasswordPrompt extends FormModal<UserAuth> {
         })
     }
 
-    mountForm(form: HTMLFormElement): void {
-        form.appendChild(this.text)
+    mount(parent: Element): void {
+        super.mount(parent)
+        document.getElementById("modal-overlay")?.classList.add("modal-login")
+    }
+    unmount(parent: Element): void {
+        super.unmount(parent)
+        document.getElementById("modal-overlay")?.classList.remove("modal-login")
+    }
 
+    mountForm(form: HTMLFormElement): void {
+        form.classList.add("login-form")
+        form.appendChild(this.brand)
+        form.appendChild(this.text)
+        form.appendChild(this.subtitle)
         this.name.mount(form)
 
         this.password.mount(form)

@@ -1,0 +1,16 @@
+[Unit]
+Description=Moonlight Web clipboard bridge for the Wayland desktop
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/python3 %h/.local/share/moonlight-clipboard/bridge.py --config %h/.config/moonlight-clipboard/config.json
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=default.target

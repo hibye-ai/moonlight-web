@@ -1,8 +1,9 @@
 use std::{sync::Weak, time::Duration};
 
 use bytes::Bytes;
-use log::{error, warn};
+use log::{error, info, warn};
 use moonlight_common::stream::audio::{AudioConfig, OpusMultistreamConfig};
+use std::time::Instant;
 use tokio::runtime::Handle;
 use webrtc::{
     api::media_engine::{MIME_TYPE_OPUS, MediaEngine},
@@ -13,6 +14,9 @@ use webrtc::{
 };
 
 use crate::transport::webrtc::{WebRtcInner, sender::TrackLocalSender};
+
+/// How often the content-free audio send metrics are summarised in the log.
+const METRICS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 pub fn register_audio_codecs(media_engine: &mut MediaEngine) -> Result<(), webrtc::Error> {
     media_engine.register_codec(
@@ -36,6 +40,9 @@ pub fn register_audio_codecs(media_engine: &mut MediaEngine) -> Result<(), webrt
 pub struct WebRtcAudio {
     sender: TrackLocalSender<TrackLocalStaticSample>,
     config: Option<OpusMultistreamConfig>,
+    metrics_logged_at: Option<Instant>,
+    last_logged_written: u64,
+    last_logged_rejected: u64,
 }
 
 impl WebRtcAudio {
@@ -43,7 +50,44 @@ impl WebRtcAudio {
         Self {
             sender: TrackLocalSender::new(runtime, peer, channel_queue_size),
             config: None,
+            metrics_logged_at: None,
+            last_logged_written: 0,
+            last_logged_rejected: 0,
         }
+    }
+
+    /// Emit a bounded, content-free delta summary at most once per interval.
+    ///
+    /// This only observes; it does not change the queue size, the packetizer,
+    /// the RTP timestamps or the playout-delay extension. Choosing a buffer or
+    /// a drop policy without the numbers this logs would be an unmeasured
+    /// change, so the default behaviour stays as it is.
+    fn maybe_log_metrics(&mut self) {
+        let now = Instant::now();
+        let due = match self.metrics_logged_at {
+            None => true,
+            Some(last) => now.duration_since(last) >= METRICS_LOG_INTERVAL,
+        };
+        if !due {
+            return;
+        }
+
+        let metrics = self.sender.metrics();
+        let written = metrics.written_samples();
+        let rejected = metrics.rejected_samples();
+        let written_delta = written.saturating_sub(self.last_logged_written);
+        let rejected_delta = rejected.saturating_sub(self.last_logged_rejected);
+
+        info!(
+            "[Stream] audio sender (content-free): written_delta={} rejected_delta={} {}",
+            written_delta,
+            rejected_delta,
+            metrics.summary()
+        );
+
+        self.metrics_logged_at = Some(now);
+        self.last_logged_written = written;
+        self.last_logged_rejected = rejected;
     }
 }
 
@@ -97,6 +141,10 @@ impl WebRtcAudio {
             return;
         };
 
+        // The packetizer derives the RTP clock from this fixed sample duration,
+        // so the Opus frame duration handed to it must stay the configured one.
+        // `data` is the encoded Opus packet; its byte length is not proportional
+        // to the frame duration, so it is not validated here.
         let duration =
             Duration::from_secs_f64(config.samples_per_frame as f64 / config.sample_rate as f64);
 
@@ -109,10 +157,19 @@ impl WebRtcAudio {
             ..Default::default()
         };
 
-        self.sender.send_samples(vec![sample], false).await;
+        // A rejected sample (queue full) is counted inside the sender; the
+        // caller deliberately does not block the host audio callback on it.
+        let _ = self.sender.send_samples(vec![sample], false).await;
+
+        self.maybe_log_metrics();
     }
 
     fn config(&self) -> AudioConfig {
         AudioConfig::STEREO
+    }
+
+    /// Stop the audio sample sender and RTCP reader tasks.
+    pub async fn shutdown(&mut self) {
+        self.sender.shutdown().await;
     }
 }

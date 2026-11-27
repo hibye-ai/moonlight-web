@@ -281,6 +281,30 @@ pub struct GetUsersResponse {
 
 #[derive(Serialize, Deserialize, Debug, TS)]
 #[ts(export, export_to = EXPORT_PATH)]
+pub struct SessionInfo {
+    /// Opaque SHA-256 based fingerprint, never the bearer token itself.
+    pub id: String,
+    pub user_id: u32,
+    pub user_name: String,
+    pub age_seconds: u64,
+    pub expires_in_seconds: u64,
+    pub current: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, TS)]
+#[ts(export, export_to = EXPORT_PATH)]
+pub struct GetSessionsResponse {
+    pub sessions: Vec<SessionInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, TS)]
+#[ts(export, export_to = EXPORT_PATH)]
+pub struct DeleteSessionRequest {
+    pub id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, TS)]
+#[ts(export, export_to = EXPORT_PATH)]
 pub struct DetailedRole {
     pub id: u32,
     pub name: String,
@@ -309,7 +333,7 @@ pub struct StreamSettings {
     pub hdr: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, TS)]
 #[ts(export, export_to = EXPORT_PATH)]
 pub struct StreamPermissions {
     pub allow_add_hosts: bool,

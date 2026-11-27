@@ -17,12 +17,28 @@ export class User implements Component {
     private user: DetailedUser | { id: number }
 
     private div = document.createElement("div")
+    private avatarElement = document.createElement("span")
+    private copyElement = document.createElement("div")
     private nameElement = document.createElement("p")
+    private roleElement = document.createElement("p")
+    private chevronElement = document.createElement("span")
 
     constructor(api: Api, user: DetailedUser | { id: number }) {
         this.api = api
 
-        this.div.appendChild(this.nameElement)
+        this.div.classList.add("user-card")
+        this.avatarElement.classList.add("user-avatar")
+        this.copyElement.classList.add("user-card-copy")
+        this.nameElement.classList.add("user-card-name")
+        this.roleElement.classList.add("user-card-role")
+        this.chevronElement.classList.add("user-card-chevron")
+        this.chevronElement.innerText = "›"
+
+        this.copyElement.appendChild(this.nameElement)
+        this.copyElement.appendChild(this.roleElement)
+        this.div.appendChild(this.avatarElement)
+        this.div.appendChild(this.copyElement)
+        this.div.appendChild(this.chevronElement)
         this.div.addEventListener("click", this.onClick.bind(this))
         this.div.addEventListener("contextmenu", this.onContextMenu.bind(this))
 
@@ -46,6 +62,9 @@ export class User implements Component {
         this.user = user
 
         this.nameElement.innerText = user.name
+        this.avatarElement.innerText = user.name.trim().slice(0, 1).toUpperCase() || "?"
+        this.roleElement.innerText = user.role
+        this.div.title = user.name
     }
 
     private onClick() {

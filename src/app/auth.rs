@@ -6,9 +6,11 @@ use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{self, Visitor},
 };
+use sha2::{Digest, Sha256};
 
 use crate::app::AppError;
 
+#[derive(Clone)]
 pub enum UserAuth {
     None,
     UserPassword { username: String, password: String },
@@ -39,6 +41,14 @@ impl SessionToken {
         let mut arr = [0u8; SESSION_TOKEN_SIZE];
         hex::decode_to_slice(str.as_bytes(), &mut arr)?;
         Ok(SessionToken(arr))
+    }
+
+    /// Stable, non-secret identifier suitable for an admin session list.
+    /// The actual bearer token is never exposed outside the storage layer.
+    pub fn fingerprint(&self) -> String {
+        let mut encoded = [0u8; SESSION_TOKEN_SIZE * 2];
+        let digest = Sha256::digest(self.encode(&mut encoded).as_bytes());
+        hex::encode(&digest[..8])
     }
 }
 

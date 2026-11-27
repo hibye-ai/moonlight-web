@@ -1,5 +1,5 @@
 import { Component } from "./index.js"
-import { ERROR_IMAGE, INFO_IMAGE, WARN_IMAGE } from "../resources/index.js"
+import { icon, IconName } from "./icons.js"
 import { ListComponent } from "./list.js"
 
 type NotificationLevel = "error" | "warn" | "info"
@@ -28,13 +28,13 @@ export function showNotification(message: string, level: NotificationLevel = "er
 
     let error: NotificationComponent
     if (level == "error") {
-        error = new NotificationComponent(message, ERROR_IMAGE)
+        error = new NotificationComponent(message, "error")
     } else if (level == "warn") {
-        error = new NotificationComponent(message, WARN_IMAGE)
-    } else if (level = "info") {
-        error = new NotificationComponent(message, INFO_IMAGE)
+        error = new NotificationComponent(message, "warn")
+    } else if (level == "info") {
+        error = new NotificationComponent(message, "info")
     } else {
-        error = new NotificationComponent(`Unknown notification level (\"${level}\") for message: ${message}`, ERROR_IMAGE)
+        error = new NotificationComponent(`Unknown notification level (\"${level}\") for message: ${message}`, "error")
     }
 
     notificationListComponent.append(error)
@@ -55,23 +55,21 @@ window.addEventListener("error", handleError)
 window.addEventListener("unhandledrejection", handleRejection)
 
 class NotificationComponent implements Component {
+    private root: HTMLDivElement = document.createElement("div")
     private messageElement: HTMLElement = document.createElement("p")
-    private imageElement: HTMLImageElement = document.createElement("img")
 
-    constructor(message: string, image: string) {
+    constructor(message: string, level: IconName & ("error" | "warn" | "info")) {
+        this.root.classList.add("toast", `toast-${level}`)
         this.messageElement.innerText = message
         this.messageElement.classList.add("notification-message")
 
-        this.imageElement.src = image
-        this.imageElement.classList.add("notification-image")
+        this.root.append(icon(level, "toast-icon"), this.messageElement)
     }
 
     mount(parent: Element): void {
-        parent.appendChild(this.imageElement)
-        parent.appendChild(this.messageElement)
+        parent.appendChild(this.root)
     }
     unmount(parent: Element): void {
-        parent.removeChild(this.imageElement)
-        parent.removeChild(this.messageElement)
+        parent.removeChild(this.root)
     }
 }

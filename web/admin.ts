@@ -1,6 +1,7 @@
+import { applyTheme, getStoredTheme, watchSystemTheme } from "./theme.js";
+import { AppShell } from "./component/shell.js";
 import "./polyfill/index.js"
-import "./styles/index.js"
-import { Api, apiGetRole, apiGetUser, apiLogout, apiPostRole, apiPostUser, FetchError, getApi } from "./api.js";
+import { Api, apiDeleteAllSessions, apiDeleteSession, apiGetRole, apiGetServerBackup, apiGetSessions, apiGetUser, apiLogout, apiPostRole, apiPostUser, apiRestoreServerBackup, FetchError, getApi } from "./api.js";
 import { Component, ComponentEvent } from "./component/index.js";
 import { showNotification } from "./component/notification.js";
 import { setTouchContextMenuEnabled } from "./polyfill/ios_right_click.js";
@@ -10,16 +11,19 @@ import { showMessage, showModal } from "./component/modal/index.js";
 import { buildUrl } from "./config_.js";
 import { DetailedUserPage } from "./component/user/detailed_page.js";
 import { User, UserEventListener } from "./component/user/index.js";
-import { DetailedRole, DetailedUser } from "./api_bindings.js";
+import { DetailedRole, DetailedUser, SessionInfo } from "./api_bindings.js";
 import { Role, RoleEventListener } from "./component/roles/index.js";
 import { RoleList } from "./component/roles/list.js";
 import { DetailedRolePage } from "./component/roles/detailed_page.js";
 import { AddRoleModal } from "./component/roles/add_modal.js";
 import { adoptRoleDefaultLanguage, getCurrentLanguage, getTranslations } from "./i18n.js";
+import { getBrowserProfileBackup, restoreBrowserProfileBackup } from "./settings_profiles.js";
 
 let I = getTranslations(getCurrentLanguage())
 
 async function startApp() {
+    applyTheme(getStoredTheme())
+    watchSystemTheme()
     setTouchContextMenuEnabled(true)
 
     const api = await getApi()
@@ -28,7 +32,10 @@ async function startApp() {
     adoptRoleDefaultLanguage(bootstrapRole.role.default_settings)
     I = getTranslations(getCurrentLanguage())
 
-    checkPermissions(api)
+    const currentUser = await checkPermissions(api)
+    if (!currentUser) {
+        return
+    }
 
     const rootElement = document.getElementById("root")
     if (rootElement == null) {
@@ -36,7 +43,7 @@ async function startApp() {
         return;
     }
 
-    const app = new AdminApp(api)
+    const app = new AdminApp(api, currentUser)
     app.mount(rootElement)
 
     app.forceFetch()
@@ -64,18 +71,22 @@ async function startApp() {
     }
 }
 
-async function checkPermissions(api: Api) {
+async function checkPermissions(api: Api): Promise<DetailedUser | null> {
     const user = await apiGetUser(api)
 
     if (user.role != "Admin") {
         await showMessage(I.admin.unauthorized)
-
         window.location.href = buildUrl("/")
+        return null
     }
+
+    return user
 }
 
 type AppState = { tab: "users", user_id: number | null } |
-{ tab: "roles", role_id: number | null }
+{ tab: "roles", role_id: number | null } |
+{ tab: "sessions" } |
+{ tab: "backup" }
 function pushAppState(state: AppState, pushHistory: boolean) {
     if (pushHistory) {
         history.pushState(state, "")
@@ -95,82 +106,40 @@ class AdminApp implements Component {
 
     private api: Api
 
-    private root = document.createElement("div")
+    private shell: AppShell
+    private content: HTMLElement
 
     private currentState: AppState | null = null
-
-    // Top Line
-    private topLine = document.createElement("div")
-
-    private moonlightTextElement = document.createElement("h1")
-
-    private topLineActions = document.createElement("div")
-    private logoutButton = document.createElement("button")
-    private userButton = document.createElement("button")
-
-    // Different tabs
-    private tabs = document.createElement("div")
-    private userTabButton = document.createElement("button")
-    private rolesTabButton = document.createElement("button")
-
-    // Content
-    private content = document.createElement("div")
 
     // The actual content of the tabs
     private users: UserPanel | null = null
     private roles: RolePanel | null = null
+    private sessions: SessionPanel | null = null
+    private backup: BackupPanel | null = null
 
-    constructor(api: Api) {
+    constructor(api: Api, currentUser: DetailedUser) {
         this.api = api
 
-        // Top Line
-        this.topLine.classList.add("top-line")
+        this.shell = new AppShell(I.ui.admin)
+        this.content = this.shell.content
+        this.content.classList.add("admin-panel-content")
 
-        this.moonlightTextElement.innerHTML =
-            'Moonlight Web <span style="color:red; text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000; -webkit-text-stroke: 2px #000">Admin</span>'
+        this.shell.addNavItem("users", "users", I.admin.users, () => this.setAppState({ tab: "users", user_id: null }))
+        this.shell.addNavItem("roles", "key", I.admin.roles, () => this.setAppState({ tab: "roles", role_id: null }))
+        this.shell.addNavItem("sessions", "clock", I.admin.sessions, () => this.setAppState({ tab: "sessions" }))
+        this.shell.addNavItem("backup", "database", I.admin.backup, () => this.setAppState({ tab: "backup" }))
 
-        this.topLine.appendChild(this.moonlightTextElement)
-
-        this.topLine.appendChild(this.topLineActions)
-        this.topLineActions.classList.add("top-line-actions")
-
-        // TODO: logout button doesn't work on default user
-        this.logoutButton.addEventListener("click", async () => {
-            await apiLogout(this.api)
-            window.location.reload()
-        })
-        this.logoutButton.classList.add("logout-button")
-        this.topLineActions.appendChild(this.logoutButton)
-
-        this.userButton.addEventListener("click", async () => {
+        this.shell.addFooterItem("library", I.ui.backToLibrary, () => {
             window.location.href = buildUrl("/")
         })
-        this.userButton.classList.add("user-button")
-        this.topLineActions.appendChild(this.userButton)
-
-        this.root.appendChild(this.topLine)
-
-        // Tab div
-        this.tabs.classList.add("admin-panel-tabs")
-        this.root.appendChild(this.tabs)
-
-        // Users tab
-        this.userTabButton.innerText = I.admin.users
-        this.userTabButton.addEventListener("click", () => {
-            this.setAppState({ tab: "users", user_id: null })
-        })
-        this.tabs.appendChild(this.userTabButton)
-
-        // Roles tab
-        this.rolesTabButton.innerText = I.admin.roles
-        this.rolesTabButton.addEventListener("click", () => {
-            this.setAppState({ tab: "roles", role_id: null })
-        })
-        this.tabs.appendChild(this.rolesTabButton)
-
-        // Content div
-        this.content.classList.add("admin-panel-content")
-        this.root.appendChild(this.content)
+        // A default user is authenticated by server configuration rather than
+        // a revocable browser session, so showing a logout action is misleading.
+        if (!currentUser.is_default_user) {
+            this.shell.addFooterItem("logout", I.ui.logout, async () => {
+                await apiLogout(this.api)
+                window.location.href = buildUrl("/")
+            })
+        }
     }
 
     async forceFetch() {
@@ -178,6 +147,8 @@ class AdminApp implements Component {
             await this.users?.forceFetch()
         } else if (this.currentState?.tab == "roles") {
             await this.roles?.forceFetch()
+        } else if (this.currentState?.tab == "sessions") {
+            await this.sessions?.forceFetch()
         }
     }
 
@@ -189,6 +160,10 @@ class AdminApp implements Component {
                 this.users?.unmount(this.content)
             } else if (this.currentState?.tab == "roles") {
                 this.roles?.unmount(this.content)
+            } else if (this.currentState?.tab == "sessions") {
+                this.sessions?.unmount(this.content)
+            } else if (this.currentState?.tab == "backup") {
+                this.backup?.unmount(this.content)
             }
 
             // Mount and create (if necessary) new tab
@@ -210,11 +185,27 @@ class AdminApp implements Component {
                 }
 
                 this.roles.mount(this.content)
+            } else if (state.tab == "sessions") {
+                if (!this.sessions) {
+                    this.sessions = new SessionPanel(this.api)
+                }
+                this.sessions.mount(this.content)
+                void this.sessions.forceFetch()
+            } else if (state.tab == "backup") {
+                if (!this.backup) {
+                    this.backup = new BackupPanel(this.api)
+                }
+                this.backup.mount(this.content)
             }
         }
 
         // Save app state to browser history
         pushAppState(state, pushIntoHistory ?? true)
+
+        const titles = { users: I.admin.users, roles: I.admin.roles, sessions: I.admin.sessions, backup: I.admin.backup }
+        this.shell.setHeader({ eyebrow: I.ui.admin, title: titles[state.tab] })
+        this.shell.setActiveNav(state.tab)
+        this.shell.setView(`admin-${state.tab}`)
 
         // Change the content (e.g. user / role) of the tab
         this.currentState = state
@@ -229,10 +220,10 @@ class AdminApp implements Component {
     }
 
     mount(parent: HTMLElement): void {
-        parent.appendChild(this.root)
+        this.shell.mount(parent)
     }
     unmount(parent: HTMLElement): void {
-        parent.removeChild(this.root)
+        this.shell.unmount(parent)
     }
 }
 
@@ -258,6 +249,14 @@ class UserPanel implements Component {
         this.userPanel.classList.add("user-panel")
         this.rootDiv.appendChild(this.userPanel)
 
+        const userPanelToolbar = document.createElement("div")
+        userPanelToolbar.classList.add("user-panel-toolbar")
+        const userPanelTitle = document.createElement("div")
+        userPanelTitle.classList.add("user-panel-title")
+        userPanelTitle.innerText = I.admin.users
+        userPanelToolbar.appendChild(userPanelTitle)
+
+        this.addUserButton.classList.add("user-add-button")
         this.addUserButton.innerText = I.admin.addUser
         this.addUserButton.addEventListener("click", async () => {
             const addUserModal = new AddUserModal(api)
@@ -280,12 +279,17 @@ class UserPanel implements Component {
                 }
             }
         })
-        this.userPanel.appendChild(this.addUserButton)
+        userPanelToolbar.appendChild(this.addUserButton)
+        this.userPanel.appendChild(userPanelToolbar)
 
+        const searchWrap = document.createElement("div")
+        searchWrap.classList.add("user-search-wrap")
+        this.userSearch.classList.add("user-search")
         this.userSearch.placeholder = I.admin.searchUser
-        this.userSearch.type = "text"
+        this.userSearch.type = "search"
         this.userSearch.addEventListener("input", this.onUserSearchChange.bind(this))
-        this.userPanel.appendChild(this.userSearch)
+        searchWrap.appendChild(this.userSearch)
+        this.userPanel.appendChild(searchWrap)
 
         this.userList = new UserList(api)
         this.userList.addUserClickedListener(this.onUserClicked.bind(this))
@@ -371,6 +375,14 @@ class RolePanel implements Component {
         this.rolePanel.classList.add("role-panel")
         this.rootDiv.appendChild(this.rolePanel)
 
+        const rolePanelToolbar = document.createElement("div")
+        rolePanelToolbar.classList.add("role-panel-toolbar")
+        const rolePanelTitle = document.createElement("div")
+        rolePanelTitle.classList.add("role-panel-title")
+        rolePanelTitle.innerText = I.admin.roles
+        rolePanelToolbar.appendChild(rolePanelTitle)
+
+        this.addRoleButton.classList.add("role-add-button")
         this.addRoleButton.innerText = I.admin.addRole
         this.addRoleButton.addEventListener("click", async () => {
             const addRoleModal = new AddRoleModal()
@@ -393,12 +405,17 @@ class RolePanel implements Component {
                 }
             }
         })
-        this.rolePanel.appendChild(this.addRoleButton)
+        rolePanelToolbar.appendChild(this.addRoleButton)
+        this.rolePanel.appendChild(rolePanelToolbar)
 
+        const roleSearchWrap = document.createElement("div")
+        roleSearchWrap.classList.add("role-search-wrap")
+        this.roleSearch.classList.add("role-search")
         this.roleSearch.placeholder = I.admin.searchRole
-        this.roleSearch.type = "text"
+        this.roleSearch.type = "search"
         this.roleSearch.addEventListener("input", this.onRoleSearchChange.bind(this))
-        this.rolePanel.appendChild(this.roleSearch)
+        roleSearchWrap.appendChild(this.roleSearch)
+        this.rolePanel.appendChild(roleSearchWrap)
 
         this.roleList = new RoleList(api)
         this.roleList.addRoleClickedListener(this.onRoleClicked.bind(this))
@@ -459,4 +476,228 @@ class RolePanel implements Component {
     unmount(parent: HTMLElement): void {
         parent.removeChild(this.rootDiv)
     }
+}
+
+
+function formatSessionDuration(seconds: number | bigint): string {
+    const safe = Math.max(0, Math.floor(Number(seconds)))
+    if (safe < 60) return `${safe}s`
+    if (safe < 3600) return `${Math.floor(safe / 60)}m`
+    if (safe < 86400) return `${Math.floor(safe / 3600)}h ${Math.floor((safe % 3600) / 60)}m`
+    return `${Math.floor(safe / 86400)}d ${Math.floor((safe % 86400) / 3600)}h`
+}
+
+class SessionPanel implements Component {
+    private api: Api
+    private root = document.createElement("section")
+    private list = document.createElement("div")
+    private refreshButton = document.createElement("button")
+    private logoutAllButton = document.createElement("button")
+
+    constructor(api: Api) {
+        this.api = api
+        this.root.classList.add("session-panel")
+
+        const header = document.createElement("div")
+        header.classList.add("admin-tool-header")
+        const title = document.createElement("h2")
+        title.innerText = I.admin.sessions
+        header.appendChild(title)
+        const actions = document.createElement("div")
+        actions.classList.add("admin-tool-actions")
+
+        this.refreshButton.type = "button"
+        this.refreshButton.innerText = I.admin.refreshSessions
+        this.refreshButton.addEventListener("click", () => void this.forceFetch())
+        actions.appendChild(this.refreshButton)
+
+        this.logoutAllButton.type = "button"
+        this.logoutAllButton.classList.add("danger-button")
+        this.logoutAllButton.innerText = I.admin.logoutAllSessions
+        this.logoutAllButton.addEventListener("click", () => void this.logoutAll())
+        actions.appendChild(this.logoutAllButton)
+        header.appendChild(actions)
+        this.root.appendChild(header)
+
+        this.list.classList.add("session-list")
+        this.root.appendChild(this.list)
+    }
+
+    async forceFetch() {
+        this.refreshButton.disabled = true
+        try {
+            const response = await apiGetSessions(this.api)
+            this.render(response.sessions)
+        } finally {
+            this.refreshButton.disabled = false
+        }
+    }
+
+    private render(sessions: SessionInfo[]) {
+        this.list.replaceChildren()
+        if (sessions.length === 0) {
+            const empty = document.createElement("p")
+            empty.classList.add("admin-tool-empty")
+            empty.innerText = I.admin.sessionEmpty
+            this.list.appendChild(empty)
+            this.logoutAllButton.disabled = true
+            return
+        }
+        this.logoutAllButton.disabled = false
+
+        for (const session of sessions) {
+            const row = document.createElement("div")
+            row.classList.add("session-card")
+            const copy = document.createElement("div")
+            copy.classList.add("session-card-copy")
+            const name = document.createElement("strong")
+            name.innerText = session.user_name
+            copy.appendChild(name)
+            const meta = document.createElement("span")
+            meta.innerText = `ID ${session.user_id} · ${I.admin.sessionAge} ${formatSessionDuration(session.age_seconds)} · ${I.admin.sessionExpires} ${formatSessionDuration(session.expires_in_seconds)}`
+            copy.appendChild(meta)
+            row.appendChild(copy)
+
+            if (session.current) {
+                const badge = document.createElement("span")
+                badge.classList.add("current-session-badge")
+                badge.innerText = I.admin.currentSession
+                row.appendChild(badge)
+            }
+
+            const revoke = document.createElement("button")
+            revoke.type = "button"
+            revoke.classList.add("session-revoke-button")
+            revoke.innerText = I.admin.revokeSession
+            revoke.addEventListener("click", async () => {
+                revoke.disabled = true
+                try {
+                    await apiDeleteSession(this.api, { id: session.id })
+                    if (session.current) {
+                        window.location.href = buildUrl("/")
+                    } else {
+                        await this.forceFetch()
+                    }
+                } finally {
+                    revoke.disabled = false
+                }
+            })
+            row.appendChild(revoke)
+            this.list.appendChild(row)
+        }
+    }
+
+    private async logoutAll() {
+        if (!window.confirm(I.admin.sessionLogoutAllConfirm)) return
+        this.logoutAllButton.disabled = true
+        try {
+            await apiDeleteAllSessions(this.api)
+            window.location.href = buildUrl("/")
+        } finally {
+            this.logoutAllButton.disabled = false
+        }
+    }
+
+    mount(parent: HTMLElement): void { parent.appendChild(this.root) }
+    unmount(parent: HTMLElement): void { parent.removeChild(this.root) }
+}
+
+class BackupPanel implements Component {
+    private api: Api
+    private root = document.createElement("section")
+    private fileInput = document.createElement("input")
+
+    constructor(api: Api) {
+        this.api = api
+        this.root.classList.add("backup-panel")
+
+        const header = document.createElement("div")
+        header.classList.add("admin-tool-header")
+        const title = document.createElement("h2")
+        title.innerText = I.admin.backup
+        header.appendChild(title)
+        this.root.appendChild(header)
+
+        const warning = document.createElement("p")
+        warning.classList.add("backup-warning")
+        warning.innerText = I.admin.backupWarning
+        this.root.appendChild(warning)
+
+        const actions = document.createElement("div")
+        actions.classList.add("backup-actions")
+        const exportButton = document.createElement("button")
+        exportButton.type = "button"
+        exportButton.innerText = I.admin.backupExport
+        exportButton.addEventListener("click", () => void this.exportBackup(exportButton))
+        actions.appendChild(exportButton)
+
+        const importButton = document.createElement("button")
+        importButton.type = "button"
+        importButton.classList.add("danger-button")
+        importButton.innerText = I.admin.backupImport
+        importButton.addEventListener("click", () => this.fileInput.click())
+        actions.appendChild(importButton)
+        this.root.appendChild(actions)
+
+        this.fileInput.type = "file"
+        this.fileInput.accept = "application/json,.json"
+        this.fileInput.hidden = true
+        this.fileInput.addEventListener("change", () => void this.importBackup())
+        this.root.appendChild(this.fileInput)
+    }
+
+    private async exportBackup(button: HTMLButtonElement) {
+        button.disabled = true
+        try {
+            const server = await apiGetServerBackup(this.api)
+            const bundle = {
+                format: "moonlight-web-backup",
+                version: 1,
+                createdAt: new Date().toISOString(),
+                server,
+                browser: getBrowserProfileBackup(),
+            }
+            const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" })
+            const url = URL.createObjectURL(blob)
+            const link = document.createElement("a")
+            link.href = url
+            link.download = `moonlight-web-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.json`
+            document.body.appendChild(link)
+            link.click()
+            link.remove()
+            window.setTimeout(() => URL.revokeObjectURL(url), 0)
+        } finally {
+            button.disabled = false
+        }
+    }
+
+    private async importBackup() {
+        const file = this.fileInput.files?.[0]
+        this.fileInput.value = ""
+        if (!file) return
+
+        let bundle: any
+        try {
+            bundle = JSON.parse(await file.text())
+        } catch {
+            await showMessage(I.admin.backupInvalid)
+            return
+        }
+        if (bundle?.format !== "moonlight-web-backup" || bundle?.version !== 1 || !bundle?.server) {
+            await showMessage(I.admin.backupInvalid)
+            return
+        }
+        if (!window.confirm(I.admin.backupRestoreConfirm)) return
+
+        try {
+            await apiRestoreServerBackup(this.api, bundle.server)
+            restoreBrowserProfileBackup(bundle.browser)
+            window.location.href = buildUrl("/")
+        } catch {
+            await showMessage(I.admin.backupRestoreFailed)
+        }
+    }
+
+    mount(parent: HTMLElement): void { parent.appendChild(this.root) }
+    unmount(parent: HTMLElement): void { parent.removeChild(this.root) }
 }

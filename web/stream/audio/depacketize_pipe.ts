@@ -28,20 +28,31 @@ export class DepacketizeAudioPipe implements DataPipe {
 
     setup(setup: AudioPlayerSetup) {
         this.packetDurationMicroseconds = setup.samplesPerFrame * 1_000_000 / setup.sampleRate
+        // A (re)connect restarts the audio timeline; a stale offset would make the
+        // downstream AudioData timeline jump arbitrarily.
+        this.resetClock()
 
         if ("setup" in this.base && typeof this.base.setup == "function") {
             return this.base.setup(...arguments)
         }
     }
 
+    /// Restart the packet clock. Called by setup() and usable on a reconnect that does
+    /// not re-run the whole pipeline setup.
+    resetClock() {
+        this.timestampMicroseconds = 0
+    }
+
     submitPacket(buffer: ArrayBuffer) {
+        const timestampMicroseconds = this.timestampMicroseconds
+
         this.base.decodeAndPlay({
             data: buffer,
-            timestampMicroseconds: 0,
-            durationMicroseconds: 0,
+            timestampMicroseconds,
+            durationMicroseconds: this.packetDurationMicroseconds,
         })
 
-        this.timestampMicroseconds += this.packetDurationMicroseconds
+        this.timestampMicroseconds = timestampMicroseconds + this.packetDurationMicroseconds
     }
 
     getBase(): Pipe | null {

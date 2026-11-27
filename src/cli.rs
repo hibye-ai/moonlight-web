@@ -99,6 +99,19 @@ pub struct CliConfig {
     /// Overwrites `web_server.forwarded_header.username_header`.
     #[arg(long, env = "FORWARDED_HEADER")]
     pub forwarded_header: Option<String>,
+    /// Overwrites `web_server.forwarded_header.trusted_proxy_ips` when forwarded auth is enabled.
+    #[arg(
+        long,
+        env = "FORWARDED_HEADER_TRUSTED_PROXY_IPS",
+        value_delimiter = ','
+    )]
+    pub forwarded_header_trusted_proxy_ips: Option<Vec<IpAddr>>,
+    /// Overwrites `web_server.trusted_forwarded_proto_ips`: peers allowed to assert the
+    /// external scheme (`X-Forwarded-Proto` / `Forwarded: proto=`) for the session-cookie
+    /// transport decision. Exact addresses only. Entries are compared as single IPs, so a
+    /// prefix or range in this value matches nothing rather than matching broadly.
+    #[arg(long, env = "TRUSTED_FORWARDED_PROTO_IPS", value_delimiter = ',')]
+    pub trusted_forwarded_proto_ips: Option<Vec<IpAddr>>,
     /// Overwrites `log.level_filter`.
     #[arg(long, env = "LOG_LEVEL")]
     pub log_level_filter: Option<LevelFilter>,
@@ -159,15 +172,24 @@ impl CliConfig {
             config.web_server.url_path_prefix = url_path_prefix;
         }
         if let Some(forwarded_header) = self.forwarded_header {
+            let previous = config
+                .web_server
+                .forwarded_header
+                .clone()
+                .unwrap_or_default();
             config.web_server.forwarded_header = Some(ForwardedHeaders {
                 username_header: forwarded_header,
-                auto_create_missing_user: config
-                    .web_server
-                    .forwarded_header
-                    .clone()
-                    .unwrap_or_default()
-                    .auto_create_missing_user,
+                auto_create_missing_user: previous.auto_create_missing_user,
+                trusted_proxy_ips: previous.trusted_proxy_ips,
             });
+        }
+        if let Some(trusted_proxy_ips) = self.forwarded_header_trusted_proxy_ips
+            && let Some(forwarded_header) = config.web_server.forwarded_header.as_mut()
+        {
+            forwarded_header.trusted_proxy_ips = trusted_proxy_ips;
+        }
+        if let Some(trusted_forwarded_proto_ips) = self.trusted_forwarded_proto_ips {
+            config.web_server.trusted_forwarded_proto_ips = trusted_forwarded_proto_ips;
         }
         if let Some(log_level_filter) = self.log_level_filter {
             config.log.level_filter = log_level_filter;

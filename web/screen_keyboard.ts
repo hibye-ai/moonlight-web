@@ -11,6 +11,23 @@ export class ScreenKeyboard {
     private fakeElement = document.createElement("textarea")
 
     private enabled: boolean = false
+    private documentMode = false
+    private readonly clickListener = this.refocusIfEnabled.bind(this)
+
+    setDocumentMode(enabled: boolean) {
+        const changed = this.documentMode !== enabled
+        this.documentMode = enabled
+        if (enabled && changed) {
+            this.resetInputValue()
+            this.fakeElement.focus()
+        } else if (enabled) this.refocusIfEnabled()
+        else if (!this.enabled && document.activeElement === this.fakeElement) this.fakeElement.blur()
+    }
+    dispose() {
+        this.documentMode = false
+        this.hide()
+        document.removeEventListener("click", this.clickListener)
+    }
 
     constructor() {
         this.fakeElement.classList.add("hiddeninput")
@@ -26,7 +43,7 @@ export class ScreenKeyboard {
         this.fakeElement.addEventListener("input", this.onKeyInput.bind(this))
         this.fakeElement.addEventListener("compositionend", this.onCompositionEnd.bind(this))
 
-        document.addEventListener("click", this.refocusIfEnabled.bind(this))
+        document.addEventListener("click", this.clickListener)
     }
 
     getHiddenElement() {
@@ -68,7 +85,10 @@ export class ScreenKeyboard {
         }
     }
     private refocusIfEnabled() {
-        if (!this.enabled || document.activeElement === this.fakeElement) {
+        if (document.documentElement.classList.contains("modal-open")) return
+        const active = document.activeElement as HTMLElement | null
+        if (active && active !== this.fakeElement && (active.isContentEditable || ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].indexOf(active.tagName) !== -1)) return
+        if ((!this.enabled && !this.documentMode) || document.activeElement === this.fakeElement) {
             return
         }
 

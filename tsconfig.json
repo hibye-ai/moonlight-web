@@ -3,6 +3,7 @@
     "rootDir": "web",
     "outDir": "./dist",
     "target": "ES6",
+    "lib": ["es6", "dom", "dom.iterable", "scripthost", "es2017.object", "es2017.string", "es2018.promise"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,

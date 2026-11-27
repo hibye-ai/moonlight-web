@@ -1,6 +1,7 @@
 use common::{api_bindings::RtcIceServer, config::WebRtcConfig};
 use log::error;
-use tokio::process::Command;
+use std::time::Duration;
+use tokio::{process::Command, time::timeout};
 use tracing::debug;
 
 pub async fn load_dynamic_ice_servers(config: &WebRtcConfig) -> Vec<RtcIceServer> {
@@ -13,10 +14,16 @@ pub async fn load_dynamic_ice_servers(config: &WebRtcConfig) -> Vec<RtcIceServer
 
     let mut script = Command::new(script_command);
 
-    let output = match script.output().await {
-        Ok(value) => value,
-        Err(err) => {
+    let output = match timeout(Duration::from_secs(5), script.output()).await {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => {
             error!("Failed to run WebRTC ice server script: {err}");
+            return vec![];
+        }
+        Err(_) => {
+            error!(
+                "WebRTC ice server script timed out after 5 seconds; using configured ICE servers only"
+            );
             return vec![];
         }
     };
